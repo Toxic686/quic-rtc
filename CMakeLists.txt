@@ -35,9 +35,11 @@ option(NO_WEBSOCKET "Disable WebSocket support" OFF)
 option(NO_MEDIA "Disable media transport support" OFF)
 option(NO_EXAMPLES "Disable examples" OFF)
 option(NO_TESTS "Disable tests build" OFF)
+option(ENABLE_QUIC_TESTS "Enable QUIC tests" ON)
 option(WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(CAPI_STDCALL "Set calling convention of C API callbacks stdcall" OFF)
 option(SCTP_DEBUG "Enable SCTP debugging output to verbose log" OFF)
+option(ENABLE_QUIC "Enable QUIC transport support" ON)
 option(RTC_UPDATE_VERSION_HEADER "Enable updating the version header" OFF)
 
 if (USE_GNUTLS AND USE_MBEDTLS)
@@ -177,6 +179,14 @@ set(LIBDATACHANNEL_IMPL_SOURCES
 	${CMAKE_CURRENT_SOURCE_DIR}/src/impl/wshandshake.cpp
 )
 
+# Add QUIC transport sources if enabled
+if(ENABLE_QUIC)
+	list(APPEND LIBDATACHANNEL_IMPL_SOURCES
+		${CMAKE_CURRENT_SOURCE_DIR}/src/impl/quicktransport.cpp
+		${CMAKE_CURRENT_SOURCE_DIR}/src/impl/quicdatachannel.cpp
+	)
+endif()
+
 set(LIBDATACHANNEL_IMPL_HEADERS
 	${CMAKE_CURRENT_SOURCE_DIR}/src/impl/certificate.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/src/impl/channel.hpp
@@ -210,6 +220,14 @@ set(LIBDATACHANNEL_IMPL_HEADERS
 	${CMAKE_CURRENT_SOURCE_DIR}/src/impl/wstransport.hpp
 	${CMAKE_CURRENT_SOURCE_DIR}/src/impl/wshandshake.hpp
 )
+
+# Add QUIC transport headers if enabled
+if(ENABLE_QUIC)
+	list(APPEND LIBDATACHANNEL_IMPL_HEADERS
+		${CMAKE_CURRENT_SOURCE_DIR}/src/impl/quicktransport.hpp
+		${CMAKE_CURRENT_SOURCE_DIR}/src/impl/quicdatachannel.hpp
+	)
+endif()
 
 set(TESTS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test/main.cpp
@@ -479,6 +497,14 @@ else()
 	endif()
 endif()
 
+# Add lsquic support if QUIC is enabled
+if(ENABLE_QUIC)
+	target_compile_definitions(datachannel PRIVATE ENABLE_QUIC=1)
+	target_compile_definitions(datachannel-static PRIVATE ENABLE_QUIC=1)
+	target_link_libraries(datachannel PRIVATE lsquic)
+	target_link_libraries(datachannel-static PRIVATE lsquic)
+endif()
+
 if(CAPI_STDCALL)
 	target_compile_definitions(datachannel PUBLIC CAPI_STDCALL)
 	target_compile_definitions(datachannel-static PUBLIC CAPI_STDCALL)
@@ -607,6 +633,16 @@ if(NOT NO_EXAMPLES)
 	add_subdirectory(examples/copy-paste)
 	add_subdirectory(examples/copy-paste-capi)
 	add_subdirectory(examples/transport-quic)
+	
+	# 添加QUIC数据通道示例
+	if(ENABLE_QUIC)
+		add_subdirectory(examples/quic-datachannel-example)
+	endif()
+endif()
+
+# 添加QUIC测试
+if(ENABLE_QUIC_TESTS AND ENABLE_QUIC)
+	add_subdirectory(test)
 endif()
 
 # 添加 lsquic 依赖到 datachannel

@@ -89,6 +89,14 @@ struct RTC_CPP_EXPORT Configuration {
 	// Local maximum message size for Data Channels
 	optional<size_t> maxMessageSize;
 
+	// QUIC transport settings
+	bool enableQuicTransport = false;
+	optional<size_t> quicMaxStreamsIn = 100;
+	optional<size_t> quicMaxStreamsOut = 100;
+	optional<std::chrono::milliseconds> quicHandshakeTimeout = std::chrono::milliseconds(60000);
+	optional<std::chrono::milliseconds> quicIdleTimeout = std::chrono::milliseconds(120000);
+	optional<std::chrono::milliseconds> quicPingPeriod = std::chrono::milliseconds(30000);
+
 	// Certificates and private keys
 	optional<string> certificatePemFile;
 	optional<string> keyPemFile;

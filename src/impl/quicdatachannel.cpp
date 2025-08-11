@@ -174,7 +174,13 @@ void OutgoingQuicDataChannel::open(shared_ptr<QuicTransport> transport) {
         // Create open message for QUIC data channel
         // This would be similar to SCTP but adapted for QUIC
         std::string openMsg = "QUIC_DATA_CHANNEL_OPEN:" + mLabel + ":" + mProtocol;
-        auto message = make_message(openMsg.begin(), openMsg.end(), Message::Type::String);
+        // 修复：使用std::vector<std::byte>而不是直接转换
+        std::vector<std::byte> msgData;
+        msgData.reserve(openMsg.size());
+        for (char c : openMsg) {
+            msgData.push_back(static_cast<std::byte>(c));
+        }
+        auto message = make_message(msgData.begin(), msgData.end(), Message::Type::String);
         transport->send(std::move(message));
     }
 }
@@ -182,6 +188,7 @@ void OutgoingQuicDataChannel::open(shared_ptr<QuicTransport> transport) {
 void OutgoingQuicDataChannel::processOpenMessage(message_ptr message) {
     // Outgoing channels don't process open messages from remote
     // They only send them
+    (void)message; // 标记参数为已使用，避免警告
 }
 
 // IncomingQuicDataChannel implementation

@@ -109,6 +109,9 @@ QuicTransport::QuicTransport(shared_ptr<Transport> lower, const Configuration &c
 
     // 设置SSL上下文获取函数 - 用于创建TLS连接
     mEngineApi.ea_get_ssl_ctx = [](void *peer_ctx, const struct sockaddr *local) -> struct ssl_ctx_st* {
+        (void)peer_ctx; // 标记参数为已使用，避免警告
+        (void)local;    // 标记参数为已使用，避免警告
+        
         std::cout << "Creating SSL context..." << std::endl;  // 输出调试信息
 
         // 创建TLS方法上下文
@@ -384,10 +387,15 @@ void QuicTransport::sendReset(uint16_t streamId) {
 
 // 处理接收到的数据
 void QuicTransport::processData(binary &&data, uint16_t streamId, StreamType type) {
+    (void)streamId; // 标记参数为已使用，避免警告
+    (void)type;     // 标记参数为已使用，避免警告
+    
     // 处理接收到的数据并创建适当的消息
-    auto message = make_message(data.begin(), data.end(), Message::Type::Binary);  // 创建二进制消息
+    // 修复：data已经是binary类型（std::vector<std::byte>），可以直接使用
+    size_t dataSize = data.size();  // 在移动之前保存大小
+    auto message = make_message(std::move(data), Message::Type::Binary);  // 创建二进制消息
     recv(std::move(message));  // 向上层传递消息
-    mBytesReceived += data.size();  // 增加接收字节数统计
+    mBytesReceived += dataSize;  // 增加接收字节数统计
 }
 
 // 静态回调函数实现
@@ -431,19 +439,25 @@ void QuicTransport::on_stream_read(lsquic_stream_t *stream, lsquic_stream_ctx_t 
     ssize_t nread = lsquic_stream_read(stream, buf, sizeof(buf));  // 从流中读取数据
 
     if (nread > 0) {  // 如果读取到数据
-        binary data(buf, buf + nread);  // 创建二进制数据
+        // 使用辅助函数创建binary数据
+        auto data = make_binary_from_chars(buf, nread);
         streamCtx->connCtx->transport->processData(std::move(data), streamCtx->streamId, STREAM_BINARY);  // 处理数据
     }
 }
 
 // 流写入回调
 void QuicTransport::on_stream_write(lsquic_stream_t *stream, lsquic_stream_ctx_t *h) {
+    (void)stream; // 标记参数为已使用，避免警告
+    (void)h;      // 标记参数为已使用，避免警告
+    
     // 向流写入数据
     // 这由trySendMessage处理
 }
 
 // 流关闭回调
 void QuicTransport::on_stream_close(lsquic_stream_t *stream, lsquic_stream_ctx_t *h) {
+    (void)stream; // 标记参数为已使用，避免警告
+    
     auto *streamCtx = reinterpret_cast<QuicStreamCtx *>(h);  // 转换为流上下文
     if (streamCtx) {  // 如果流上下文存在
         streamCtx->isClosed = true;  // 设置关闭标志
@@ -470,7 +484,9 @@ int QuicTransport::send_packets_out(void *ctx, const struct lsquic_out_spec *spe
             packet_data.insert(packet_data.end(), data, data + specs[i].iov[j].iov_len);
         }
 
-        auto message = make_message(packet_data.begin(), packet_data.end(), Message::Type::Binary);  // 创建消息
+        // 使用辅助函数创建binary数据
+        auto byteData = make_binary_from_chars(packet_data.data(), packet_data.size());
+        auto message = make_message(byteData.begin(), byteData.end(), Message::Type::Binary);  // 创建消息
         transport->outgoing(std::move(message));  // 发送到下层传输层
     }
 

@@ -26,6 +26,22 @@
 
 namespace rtc::impl {
 
+// 辅助函数：从unsigned char*创建binary
+inline binary make_binary_from_chars(const unsigned char* data, size_t size) {
+    std::vector<std::byte> result(size);
+    std::transform(data, data + size, result.begin(), 
+                  [](unsigned char c) { return static_cast<std::byte>(c); });
+    return result;
+}
+
+// 辅助函数：从char*创建binary
+inline binary make_binary_from_chars(const char* data, size_t size) {
+    std::vector<std::byte> result(size);
+    std::transform(data, data + size, result.begin(), 
+                  [](char c) { return static_cast<std::byte>(c); });
+    return result;
+}
+
 class QuicTransport final : public Transport, public std::enable_shared_from_this<QuicTransport> {
 public:
     // 静态初始化函数 - 初始化lsquic库和BoringSSL

@@ -31,25 +31,30 @@ struct QuicDataChannel : DataChannel, std::enable_shared_from_this<QuicDataChann
                     Reliability reliability);
     virtual ~QuicDataChannel();
 
-    void close() override;
-    void remoteClose() override;
-    bool outgoing(message_ptr message) override;
-    void incoming(message_ptr message) override;
+    // 这些函数在基类中不是虚函数，所以不能覆盖
+    void close();
+    void remoteClose();
+    bool outgoing(message_ptr message);
+    void incoming(message_ptr message);
 
+    // 这些函数在基类中是虚函数，可以覆盖
     optional<message_variant> receive() override;
     optional<message_variant> peek() override;
     size_t availableAmount() const override;
 
-    optional<uint16_t> stream() const override;
-    string label() const override;
-    string protocol() const override;
-    Reliability reliability() const override;
+    // 这些函数在基类中不是虚函数，所以不能覆盖
+    optional<uint16_t> stream() const;
+    string label() const;
+    string protocol() const;
+    Reliability reliability() const;
 
-    bool isOpen(void) const override;
-    bool isClosed(void) const override;
-    size_t maxMessageSize() const override;
+    bool isOpen(void) const;
+    bool isClosed(void) const;
+    size_t maxMessageSize() const;
 
     virtual void assignStream(uint16_t stream) override;
+    // 添加基类的open函数声明，避免隐藏
+    using DataChannel::open;
     virtual void open(shared_ptr<QuicTransport> transport);
     virtual void processOpenMessage(message_ptr);
 

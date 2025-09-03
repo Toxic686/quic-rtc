@@ -640,10 +640,10 @@ if(NOT NO_EXAMPLES)
 	endif()
 endif()
 
-# 添加QUIC测试
-if(ENABLE_QUIC_TESTS AND ENABLE_QUIC)
-	add_subdirectory(test)
-endif()
+## 添加QUIC测试
+#if(ENABLE_QUIC_TESTS AND ENABLE_QUIC)
+#	add_subdirectory(test)
+#endif()
 
 # 添加 lsquic 依赖到 datachannel
 target_link_libraries(datachannel

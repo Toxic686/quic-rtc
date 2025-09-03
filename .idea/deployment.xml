@@ -13,6 +13,16 @@
           </excludedPaths>
         </serverdata>
       </paths>
+      <paths name="远程主机 -香港 (74100e72-8d7a-4fe6-b20f-13e62ff6fdc0)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/kratos/datachannel" local="$PROJECT_DIR$" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-debug-home" />
+          </excludedPaths>
+        </serverdata>
+      </paths>
     </serverData>
   </component>
 </project>

@@ -17,6 +17,8 @@
 #include "processor.hpp"
 #include "rtp.hpp"
 #include "sctptransport.hpp"
+#include "quicktransport.hpp"
+#include "quicdatachannel.hpp"
 #include "utils.hpp"
 
 #if RTC_ENABLE_MEDIA
@@ -249,9 +251,15 @@ shared_ptr<DtlsTransport> PeerConnection::initDtlsTransport() {
 
 			    switch (transportState) {
 			    case DtlsTransport::State::Connected:
-				    if (auto remote = remoteDescription(); remote && remote->hasApplication())
+				    if (auto remote = remoteDescription(); remote && remote->hasApplication()) {
+					    // 根据SDP中的协议类型选择传输层
+					    auto app = remote->application();
+					    if (app && app->isQuic()) {
+						    initQuicTransport();
+					    } else {
 					    initSctpTransport();
-				    else
+					    }
+				    } else
 					    changeState(State::Connected);
 
 				    mProcessor.enqueue(&PeerConnection::openTracks, shared_from_this());
@@ -362,6 +370,102 @@ shared_ptr<SctpTransport> PeerConnection::initSctpTransport() {
 	}
 }
 
+shared_ptr<QuicTransport> PeerConnection::initQuicTransport() {
+	try {
+		if (auto transport = std::atomic_load(&mQuicTransport))
+			return transport;
+
+		PLOG_INFO << "Starting QUIC transport";
+		std::cout << "🔧 开始初始化QUIC传输层..." << std::endl;
+
+		// 确保lsquic及其全局状态只初始化一次（包含 BoringSSL ex_data 索引等）
+		QuicTransport::Init();
+
+		auto lower = std::atomic_load(&mDtlsTransport);
+		if (!lower)
+			throw std::logic_error("No underlying DTLS transport for QUIC transport");
+
+		auto local = localDescription();
+		if (!local || !local->application())
+			throw std::logic_error("Starting QUIC transport without local application description");
+
+		auto remote = remoteDescription();
+		if (!remote || !remote->application())
+			throw std::logic_error(
+			    "Starting QUIC transport without remote application description");
+
+		QuicTransport::QuicSettings settings;
+		if (config.quicMaxStreamsIn.has_value())
+			settings.maxStreamsIn = config.quicMaxStreamsIn.value();
+		if (config.quicMaxStreamsOut.has_value())
+			settings.maxStreamsOut = config.quicMaxStreamsOut.value();
+		if (config.quicHandshakeTimeout.has_value())
+			settings.handshakeTimeout = config.quicHandshakeTimeout->count() * 1000; // 转换为微秒
+		if (config.quicIdleTimeout.has_value())
+			settings.idleTimeout = config.quicIdleTimeout->count() * 1000; // 转换为微秒
+		if (config.quicPingPeriod.has_value())
+			settings.pingPeriod = config.quicPingPeriod->count() * 1000; // 转换为微秒
+        if (config.quicCongestionControl.has_value())
+            settings.congestionControl = config.quicCongestionControl.value();
+
+		// 根据远程描述类型决定QUIC模式
+		// 如果远程描述是Offer → 我们是Answerer → SERVER模式
+		// 如果远程描述是Answer → 我们是Offerer → CLIENT模式
+		// 注意：DTLS角色与QUIC模式需求相反：
+		//   - DTLS: Answerer通常是Active（推荐），Offerer变成Passive
+		//   - QUIC: Offerer应该是CLIENT（主动），Answerer应该是SERVER（被动）
+		// 使用remote description类型来判断更可靠，因为local description可能会因为自动协商而改变
+		bool isClient = remote && (remote->type() == Description::Type::Answer);
+		
+		auto transport = std::make_shared<QuicTransport>(
+		    lower, config, std::move(settings),
+		    weak_bind(&PeerConnection::forwardMessage, this, _1),
+		    weak_bind(&PeerConnection::forwardBufferedAmount, this, _1, _2),
+		    [this, weak_this = weak_from_this()](Transport::State transportState) {
+			    auto shared_this = weak_this.lock();
+			    if (!shared_this)
+				    return;
+
+			    switch (transportState) {
+			    case Transport::State::Connected:
+				    changeState(State::Connected);
+				    assignDataChannels();
+				    mProcessor.enqueue(&PeerConnection::openDataChannels, shared_from_this());
+				    break;
+			    case Transport::State::Connecting:
+				    // 在CLIENT模式下，允许在Connecting状态时也打开数据通道
+				    // 这样可以通过发送数据来触发QUIC连接建立
+				    assignDataChannels();
+				    mProcessor.enqueue(&PeerConnection::openDataChannels, shared_from_this());
+				    break;
+			    case Transport::State::Failed:
+				    changeState(State::Failed);
+				    mProcessor.enqueue(&PeerConnection::remoteClose, shared_from_this());
+				    break;
+			    case Transport::State::Disconnected:
+				    changeState(State::Disconnected);
+				    mProcessor.enqueue(&PeerConnection::remoteClose, shared_from_this());
+				    break;
+			    default:
+				    // Ignore
+				    break;
+			    }
+		    },
+		    isClient);  // 传递isClient参数
+
+		return emplaceTransport(this, &mQuicTransport, std::move(transport));
+
+	} catch (const std::exception &e) {
+		PLOG_ERROR << e.what();
+		changeState(State::Failed);
+		throw std::runtime_error("QUIC transport initialization failed");
+	}
+}
+
+shared_ptr<QuicTransport> PeerConnection::getQuicTransport() const {
+	return std::atomic_load(&mQuicTransport);
+}
+
 shared_ptr<IceTransport> PeerConnection::getIceTransport() const {
 	return std::atomic_load(&mIceTransport);
 }
@@ -390,6 +494,7 @@ void PeerConnection::closeTransports() {
 
 	// Pass the pointers to a thread, allowing to terminate a transport from its own thread
 	auto sctp = std::atomic_exchange(&mSctpTransport, decltype(mSctpTransport)(nullptr));
+	auto quic = std::atomic_exchange(&mQuicTransport, decltype(mQuicTransport)(nullptr));
 	auto dtls = std::atomic_exchange(&mDtlsTransport, decltype(mDtlsTransport)(nullptr));
 	auto ice = std::atomic_exchange(&mIceTransport, decltype(mIceTransport)(nullptr));
 
@@ -397,9 +502,13 @@ void PeerConnection::closeTransports() {
 		sctp->onRecv(nullptr);
 		sctp->onBufferedAmount(nullptr);
 	}
+	if (quic) {
+		quic->onRecv(nullptr);
+		quic->onBufferedAmount(nullptr);
+	}
 
-	using array = std::array<shared_ptr<Transport>, 3>;
-	array transports{std::move(sctp), std::move(dtls), std::move(ice)};
+	using array = std::array<shared_ptr<Transport>, 4>;
+	array transports{std::move(sctp), std::move(quic), std::move(dtls), std::move(ice)};
 
 	for (const auto &t : transports)
 		if (t)
@@ -472,11 +581,19 @@ void PeerConnection::forwardMessage(message_ptr message) {
 
 	auto iceTransport = std::atomic_load(&mIceTransport);
 	auto sctpTransport = std::atomic_load(&mSctpTransport);
-	if (!iceTransport || !sctpTransport)
+	auto quicTransport = std::atomic_load(&mQuicTransport);
+	if (!iceTransport || (!sctpTransport && !quicTransport))
 		return;
 
 	const uint16_t stream = uint16_t(message->stream);
 	auto [channel, found] = findDataChannel(stream);
+
+	// Fast path: allow ACK-only control frames to be ignored when channel is unknown
+	// (prevents spurious "unexpected message" before OPEN arrives or after close)
+	if (message->type == Message::Control && !message->empty() &&
+	    reinterpret_cast<const uint8_t*>(message->data())[0] == 0x02 && !found) {
+		return;
+	}
 
 	if (DataChannel::IsOpenMessage(message)) {
 		if (found) {
@@ -484,21 +601,35 @@ void PeerConnection::forwardMessage(message_ptr message) {
 			PLOG_WARNING << "Got open message on already used stream " << stream;
 			if (channel && !channel->isClosed())
 				channel->close();
-			else
+			else if (sctpTransport)
 				sctpTransport->closeStream(message->stream);
+			else if (quicTransport)
+				quicTransport->closeStream(message->stream);
 
 			return;
 		}
 
-		const uint16_t remoteParity = (iceTransport->role() == Description::Role::Active) ? 1 : 0;
+		// Parity rule:
+		// - SCTP 使用 DTLS 角色：Active(客户端) 期望远端为奇数；Passive 期望远端为偶数
+		// - QUIC 使用 QUIC 角色：客户端生成偶数流ID，服务器生成奇数流ID
+		uint16_t remoteParity = (iceTransport->role() == Description::Role::Active) ? 1 : 0;
+		if (!sctpTransport && quicTransport) {
+			remoteParity = quicTransport->isClient() ? 1 : 0;
+		}
 		if (stream % 2 != remoteParity) {
 			// The odd/even rule is violated, the receiver must close the DataChannel
 			PLOG_WARNING << "Got open message violating the odd/even rule on stream " << stream;
+			if (sctpTransport)
 			sctpTransport->closeStream(message->stream);
+			else if (quicTransport)
+				quicTransport->closeStream(message->stream);
 			return;
 		}
 
+		if (sctpTransport)
 		channel = std::make_shared<IncomingDataChannel>(weak_from_this(), sctpTransport);
+		else if (quicTransport)
+			channel = std::make_shared<IncomingQuicDataChannel>(weak_from_this(), std::weak_ptr<QuicTransport>(quicTransport));
 		channel->assignStream(stream);
 		channel->openCallback =
 		    weak_bind(&PeerConnection::triggerDataChannel, this, weak_ptr<DataChannel>{channel});
@@ -511,7 +642,10 @@ void PeerConnection::forwardMessage(message_ptr message) {
 
 		// Invalid, close the DataChannel
 		PLOG_WARNING << "Got unexpected message on stream " << stream;
+		if (sctpTransport)
 		sctpTransport->closeStream(message->stream);
+		else if (quicTransport)
+			quicTransport->closeStream(message->stream);
 		return;
 	}
 
@@ -652,14 +786,43 @@ void PeerConnection::forwardBufferedAmount(uint16_t stream, size_t amount) {
 shared_ptr<DataChannel> PeerConnection::emplaceDataChannel(string label, DataChannelInit init) {
 	std::unique_lock lock(mDataChannelsMutex); // we are going to emplace
 
+	// 检查协议类型，决定使用 SCTP 还是 QUIC DataChannel
+	bool useQuic = false;
+	if (!init.protocol.empty() && init.protocol.find("quic") != string::npos) {
+		useQuic = true;
+	} else {
+		// 如果没有指定协议，根据传输层类型决定
+		auto quicTransport = std::atomic_load(&mQuicTransport);
+		auto sctpTransport = std::atomic_load(&mSctpTransport);
+		if (quicTransport && !sctpTransport) {
+			useQuic = true;
+		} else if (auto remote = remoteDescription(); remote && remote->hasApplication()) {
+			auto app = remote->application();
+			if (app && app->isQuic()) {
+				useQuic = true;
+			}
+		} else if (config.enableQuicTransport) {
+			useQuic = true;
+		}
+	}
+
 	// If the DataChannel is user-negotiated, do not negotiate it in-band
-	auto channel =
-	    init.negotiated
+	shared_ptr<DataChannel> channel;
+	if (useQuic) {
+		channel = init.negotiated
+		              ? std::make_shared<QuicDataChannel>(weak_from_this(), std::move(label),
+		                                                std::move(init.protocol), std::move(init.reliability))
+		              : std::make_shared<OutgoingQuicDataChannel>(weak_from_this(), std::move(label),
+		                                                          std::move(init.protocol),
+		                                                          std::move(init.reliability));
+	} else {
+		channel = init.negotiated
 	        ? std::make_shared<DataChannel>(weak_from_this(), std::move(label),
 	                                        std::move(init.protocol), std::move(init.reliability))
 	        : std::make_shared<OutgoingDataChannel>(weak_from_this(), std::move(label),
 	                                                std::move(init.protocol),
 	                                                std::move(init.reliability));
+	}
 
 	// If the user supplied a stream id, use it, otherwise assign it later
 	if (init.id) {
@@ -676,11 +839,21 @@ shared_ptr<DataChannel> PeerConnection::emplaceDataChannel(string label, DataCha
 
 	lock.unlock(); // we are going to call assignDataChannels()
 
-	// If SCTP is connected, assign and open now
+	// If transport is connected, assign and open now
 	auto sctpTransport = std::atomic_load(&mSctpTransport);
+	auto quicTransport = std::atomic_load(&mQuicTransport);
 	if (sctpTransport && sctpTransport->state() == SctpTransport::State::Connected) {
 		assignDataChannels();
 		channel->open(sctpTransport);
+	} else if (quicTransport && quicTransport->state() == Transport::State::Connected) {
+		assignDataChannels();
+		// 检查 channel 类型，调用对应的 open 方法
+		if (auto quicChannel = std::dynamic_pointer_cast<QuicDataChannel>(channel)) {
+			quicChannel->open(quicTransport);
+		} else {
+			// 如果 channel 不是 QuicDataChannel，说明类型不匹配，这是错误
+			PLOG_WARNING << "DataChannel type mismatch: expected QuicDataChannel for QUIC transport";
+		}
 	}
 
 	return channel;
@@ -701,13 +874,20 @@ bool PeerConnection::removeDataChannel(uint16_t stream) {
 
 uint16_t PeerConnection::maxDataChannelStream() const {
 	auto sctpTransport = std::atomic_load(&mSctpTransport);
-	return sctpTransport ? sctpTransport->maxStream() : (MAX_SCTP_STREAMS_COUNT - 1);
+	auto quicTransport = std::atomic_load(&mQuicTransport);
+	if (sctpTransport)
+		return sctpTransport->maxStream();
+	if (quicTransport)
+		return quicTransport->maxStream();
+	return (MAX_SCTP_STREAMS_COUNT - 1);
 }
 
 void PeerConnection::assignDataChannels() {
 	std::unique_lock lock(mDataChannelsMutex); // we are going to emplace
 
 	auto iceTransport = std::atomic_load(&mIceTransport);
+	auto sctpTransport = std::atomic_load(&mSctpTransport);
+	auto quicTransport = std::atomic_load(&mQuicTransport);
 	if (!iceTransport)
 		throw std::logic_error("Attempted to assign DataChannels without ICE transport");
 
@@ -717,12 +897,15 @@ void PeerConnection::assignDataChannels() {
 		if (!channel)
 			continue;
 
-		// RFC 8832: The peer that initiates opening a data channel selects a stream identifier
-		// for which the corresponding incoming and outgoing streams are unused.  If the side is
-		// acting as the DTLS client, it MUST choose an even stream identifier; if the side is
-		// acting as the DTLS server, it MUST choose an odd one. See
-		// https://www.rfc-editor.org/rfc/rfc8832.html#section-6
+		// Stream ID 分配规则：
+		// - SCTP: RFC8832, DTLS 客户端选偶数，服务器选奇数，步长 2
+		// - QUIC: IETF QUIC 双向流，客户端起始 0，服务器起始 1，步长 4（后两位编码方向/是否单向）
+		uint16_t streamStep = 2;
 		uint16_t stream = (iceTransport->role() == Description::Role::Active) ? 0 : 1;
+		if (quicTransport && !sctpTransport) {
+			streamStep = 4;
+			stream = quicTransport->isClient() ? 0 : 1;
+		}
 		while (true) {
 			if (stream > maxStream)
 				throw std::runtime_error("Too many DataChannels");
@@ -730,7 +913,7 @@ void PeerConnection::assignDataChannels() {
 			if (mDataChannels.find(stream) == mDataChannels.end())
 				break;
 
-			stream += 2;
+			stream += streamStep;
 		}
 
 		PLOG_DEBUG << "Assigning stream " << stream << " to DataChannel";
@@ -765,11 +948,32 @@ void PeerConnection::iterateDataChannels(
 }
 
 void PeerConnection::openDataChannels() {
-	if (auto transport = std::atomic_load(&mSctpTransport))
+	auto sctpTransport = std::atomic_load(&mSctpTransport);
+	auto quicTransport = std::atomic_load(&mQuicTransport);
+	if (sctpTransport)
 		iterateDataChannels([&](shared_ptr<DataChannel> channel) {
-			if (!channel->isOpen())
-				channel->open(transport);
+			if (!channel->isOpen()) {
+				channel->open(sctpTransport);
+			}
 		});
+	else if (quicTransport) {
+		// 对于QUIC传输，允许在Connecting状态时也打开数据通道
+		// 这样CLIENT模式可以通过发送数据来触发连接建立
+		Transport::State transportState = quicTransport->state();
+		if (transportState == Transport::State::Connected || transportState == Transport::State::Connecting) {
+			iterateDataChannels([&](shared_ptr<DataChannel> channel) {
+				if (!channel->isOpen()) {
+					// 检查 channel 类型，调用对应的 open 方法
+					if (auto quicChannel = std::dynamic_pointer_cast<QuicDataChannel>(channel)) {
+						quicChannel->open(quicTransport);
+					} else {
+						// 如果 channel 不是 QuicDataChannel，说明类型不匹配，这是错误
+						PLOG_WARNING << "DataChannel type mismatch: expected QuicDataChannel for QUIC transport";
+					}
+				}
+			});
+		}
+	}
 }
 
 void PeerConnection::closeDataChannels() {
@@ -942,7 +1146,9 @@ void PeerConnection::processLocalDescription(Description description) {
 				        std::shared_lock lock(mDataChannelsMutex);
 				        if (!mDataChannels.empty() || !mUnassignedDataChannels.empty()) {
 					        // Prefer local description
-					        Description::Application app(remoteApp->mid());
+				        // 根据远程应用的协议类型或本地配置创建Application
+				        bool useQuic = remoteApp->isQuic() || config.enableQuicTransport;
+				        Description::Application app(remoteApp->mid(), useQuic);
 					        app.setSctpPort(localSctpPort);
 					        app.setMaxMessageSize(localMaxMessageSize);
 
@@ -1051,7 +1257,9 @@ void PeerConnection::processLocalDescription(Description description) {
 				while (description.hasMid(std::to_string(m)))
 					++m;
 
-				Description::Application app(std::to_string(m));
+			// 根据本地配置创建Application
+			bool useQuic = config.enableQuicTransport;
+			Description::Application app(std::to_string(m), useQuic);
 				app.setSctpPort(localSctpPort);
 				app.setMaxMessageSize(localMaxMessageSize);
 
@@ -1138,10 +1346,21 @@ void PeerConnection::processRemoteDescription(Description description) {
 
 	auto dtlsTransport = std::atomic_load(&mDtlsTransport);
 	if (description.hasApplication()) {
+		// 根据SDP中的协议类型选择传输层
+		auto app = description.application();
+		if (app && app->isQuic()) {
+			// 使用QUIC传输
+			auto quicTransport = std::atomic_load(&mQuicTransport);
+			if (!quicTransport && dtlsTransport &&
+			    dtlsTransport->state() == Transport::State::Connected)
+				initQuicTransport();
+		} else {
+			// 使用SCTP传输
 		auto sctpTransport = std::atomic_load(&mSctpTransport);
 		if (!sctpTransport && dtlsTransport &&
 		    dtlsTransport->state() == Transport::State::Connected)
 			initSctpTransport();
+		}
 	} else {
 		mProcessor.enqueue(&PeerConnection::remoteCloseDataChannels, shared_from_this());
 	}

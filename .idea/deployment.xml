@@ -2,24 +2,14 @@
 <project version="4">
   <component name="PublishConfigData" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
-      <paths name="远程主机 (99790ba8-956a-4d99-9ce4-c1805c9908f1)">
+      <paths name="Remote Host (4ee5e762-2d82-4b56-88e2-85106d21a7ad)">
         <serverdata>
           <mappings>
             <mapping deploy="/home/kratos/datachannel" local="$PROJECT_DIR$" />
           </mappings>
           <excludedPaths>
-            <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-debug-home" />
-            <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-debug-home" />
-          </excludedPaths>
-        </serverdata>
-      </paths>
-      <paths name="远程主机 -香港 (74100e72-8d7a-4fe6-b20f-13e62ff6fdc0)">
-        <serverdata>
-          <mappings>
-            <mapping deploy="/home/kratos/datachannel" local="$PROJECT_DIR$" />
-          </mappings>
-          <excludedPaths>
-            <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-debug-home" />
+            <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-debug-company" />
+            <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-debug-company" />
           </excludedPaths>
         </serverdata>
       </paths>

@@ -837,6 +837,11 @@ Description::Application::Application(string mid)
     : Entry("application 9 UDP/DTLS/SCTP webrtc-datachannel", std::move(mid), Direction::SendRecv) {
 }
 
+Description::Application::Application(string mid, bool useQuic)
+    : Entry(useQuic ? "application 9 UDP/DTLS/QUIC webrtc-datachannel" : "application 9 UDP/DTLS/SCTP webrtc-datachannel", 
+            std::move(mid), Direction::SendRecv) {
+}
+
 Description::Application::Application(const string &mline, string mid)
     : Entry(mline, std::move(mid), Direction::SendRecv) {}
 
@@ -846,6 +851,13 @@ Description::Application Description::Application::reciprocate() const {
 	reciprocated.mMaxMessageSize.reset();
 
 	return reciprocated;
+}
+
+bool Description::Application::isQuic() const {
+	// 检查protocol字段是否包含QUIC
+	string protocolStr = protocol();
+	// protocol格式通常是 "UDP/DTLS/SCTP" 或 "UDP/DTLS/QUIC"
+	return protocolStr.find("QUIC") != string::npos;
 }
 
 void Description::Application::setSctpPort(uint16_t port) { mSctpPort = port; }

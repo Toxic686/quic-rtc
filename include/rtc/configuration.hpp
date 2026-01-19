@@ -63,6 +63,14 @@ enum class CertificateType {
 
 enum class TransportPolicy { All = RTC_TRANSPORT_POLICY_ALL, Relay = RTC_TRANSPORT_POLICY_RELAY };
 
+// QUIC Congestion Control Algorithms
+enum class QuicCongestionControl {
+    Default = 0, // Adaptive (Cubic for low RTT, BBR for high RTT/loss)
+    Cubic = 1,   // Standard Cubic algorithm (good for low latency, stable networks)
+    BBRv1 = 2,   // BBR v1 (good for high latency, packet loss, varying bandwidth)
+    Adaptive = 3 // Adaptive strategy (auto-select based on network conditions)
+};
+
 struct RTC_CPP_EXPORT Configuration {
 	// ICE settings
 	std::vector<IceServer> iceServers;
@@ -96,6 +104,7 @@ struct RTC_CPP_EXPORT Configuration {
 	optional<std::chrono::milliseconds> quicHandshakeTimeout = std::chrono::milliseconds(60000);
 	optional<std::chrono::milliseconds> quicIdleTimeout = std::chrono::milliseconds(120000);
 	optional<std::chrono::milliseconds> quicPingPeriod = std::chrono::milliseconds(30000);
+    optional<QuicCongestionControl> quicCongestionControl;
 
 	// Certificates and private keys
 	optional<string> certificatePemFile;

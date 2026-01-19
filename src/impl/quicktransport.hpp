@@ -15,12 +15,16 @@
 #include "processor.hpp"         // 包含处理器类定义
 #include "queue.hpp"            // 包含队列类定义
 #include "transport.hpp"         // 包含传输层基类定义
+#include "threadpool.hpp"        // 包含线程池定义，用于定期处理连接
 
 #include <condition_variable>    // 条件变量，用于线程同步
 #include <functional>           // 函数对象和绑定
 #include <map>                 // 映射容器
 #include <mutex>               // 互斥锁
 #include <memory>              // 智能指针
+#include <atomic>              // 原子操作
+#include <queue>               // 队列
+#include <unordered_map>       // 无序映射（发送偏移跟踪）
 
 #include "lsquic.h"            // lsquic库头文件
 
@@ -62,6 +66,7 @@ public:
         bool supportTcid0 = true;                       // 支持TCID0
         bool supportNstp = true;                        // 支持NSTP
         bool delayedAcks = true;                        // 启用延迟ACK
+        QuicCongestionControl congestionControl = QuicCongestionControl::Default; // 拥塞控制算法
     };
 
     // 构造函数 - 创建QUIC传输层对象
@@ -69,7 +74,8 @@ public:
                   const QuicSettings &settings,
                   message_callback recvCallback, 
                   amount_callback bufferedAmountCallback,
-                  state_callback stateChangeCallback);
+                  state_callback stateChangeCallback,
+                  bool isClient = false);  // 是否为客户端模式（true=CLIENT, false=SERVER）
     // 析构函数 - 清理资源
     ~QuicTransport();
 
@@ -98,6 +104,9 @@ public:
     size_t bytesReceived();                           // 获取接收字节数
     optional<std::chrono::milliseconds> rtt();       // 获取RTT时间
 
+    // 暴露客户端/服务端模式，供上层决定偶奇流规则
+    bool isClient() const { return mIsClient; }
+
 private:
     // QUIC流类型枚举 - 对应SCTP的PPID，用于标识不同类型的流
     enum StreamType : uint32_t {
@@ -125,6 +134,7 @@ private:
         uint16_t streamId;                            // 流ID
         QuicConnCtx *connCtx;                         // 指向连接上下文的指针
         std::vector<uint8_t> buffer;                  // 流数据缓冲区
+        size_t bufferOffset = 0;                      // 解析偏移（避免频繁 erase 导致 O(n)）
         bool isOpen = false;                          // 流是否打开标志
         bool isClosed = false;                        // 流是否关闭标志
     };
@@ -157,14 +167,22 @@ private:
 
     void processData(binary &&data, uint16_t streamId, StreamType type);  // 处理接收到的数据
 
+    // 序列化调用lsquic_engine_process_conns，避免重入触发断言
+    bool processEngineOnce(const char *reason);
+    // 仅发送已生成但未发送的包（不 tick conns），避免触发 lsquic 的 tick 断言
+    void sendUnsentPacketsOnce(const char *reason);
+
     // 成员变量
     const size_t mMaxMessageSize;                     // 最大消息大小限制
     const QuicSettings mSettings;                     // QUIC配置设置
+    const bool mIsClient;                              // 是否为客户端模式
     
     // lsquic引擎和连接相关
     lsquic_engine_t *mEngine;                         // lsquic引擎指针
     lsquic_conn_t *mConn;                             // QUIC连接指针
     std::unique_ptr<QuicConnCtx> mConnCtx;           // 连接上下文智能指针
+    std::atomic<bool> mLoggedFirstPacketIn{false};   // 非trace模式下只打印一次“收到首包”
+    std::atomic<bool> mLoggedFirstPacketsOut{false}; // 非trace模式下只打印一次“首次发包”
 
     // 处理器和队列管理
     Processor mProcessor;                             // 处理器对象，用于异步处理
@@ -177,14 +195,32 @@ private:
     std::map<uint16_t, size_t> mBufferedAmount;      // 流ID到缓冲量的映射
     amount_callback mBufferedAmountCallback;          // 缓冲量变化回调函数
 
+    // QUIC 写入是字节流：支持部分写入。这里按消息对象跟踪“已发送偏移”，避免对 message 做 erase (O(n^2))
+    std::unordered_map<const rtc::Message*, size_t> mSendOffsets;
+
+    // 待分配到新流的消息队列（本端主动开流时使用）
+    std::queue<message_ptr> mPendingStreamMessages;
+    std::mutex mPendingStreamMutex;
+
     // 统计信息
     std::atomic<size_t> mBytesSent = 0;              // 发送字节数统计
     std::atomic<size_t> mBytesReceived = 0;          // 接收字节数统计
+
+    // lsquic 不是线程安全的：packet_in/process_conns/stream_write/flush 等必须串行化
+    mutable std::recursive_mutex mLsquicMutex;
 
     // lsquic相关结构体
     lsquic_stream_if mStreamCallbacks;                // lsquic流回调接口
     lsquic_engine_api mEngineApi;                     // lsquic引擎API
     lsquic_engine_settings mEngineSettings;           // lsquic引擎设置
+
+    // 定期处理连接相关
+    std::atomic<bool> mPeriodicProcessingActive = false;  // 定期处理是否激活
+    std::atomic_flag mEngineProcessing = ATOMIC_FLAG_INIT; // 序列化engine处理
+    std::atomic<bool> mEngineProcessPending{false};        // 若重入被跳过，标记需再处理一次
+    void startPeriodicProcessing();                      // 开始定期处理连接
+    void stopPeriodicProcessing();                       // 停止定期处理连接
+    void periodicProcessConnections();                   // 定期处理连接的函数
 };
 
 } // namespace rtc::impl

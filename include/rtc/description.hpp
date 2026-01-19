@@ -152,10 +152,14 @@ public:
 	struct RTC_CPP_EXPORT Application : public Entry {
 	public:
 		Application(string mid = "data");
+		Application(string mid, bool useQuic);  // 新增：支持QUIC协议
 		Application(const string &mline, string mid);
 		virtual ~Application() = default;
 
 		Application reciprocate() const;
+
+		// 检查是否使用QUIC协议（通过解析protocol字段）
+		bool isQuic() const;
 
 		void setSctpPort(uint16_t port);
 		void hintSctpPort(uint16_t port);

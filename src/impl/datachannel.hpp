@@ -31,23 +31,23 @@ struct DataChannel : Channel, std::enable_shared_from_this<DataChannel> {
 	            Reliability reliability);
 	virtual ~DataChannel();
 
-	void close();
-	void remoteClose();
-	bool outgoing(message_ptr message);
-	void incoming(message_ptr message);
+	virtual void close();
+	virtual void remoteClose();
+	virtual bool outgoing(message_ptr message);
+	virtual void incoming(message_ptr message);
 
 	optional<message_variant> receive() override;
 	optional<message_variant> peek() override;
 	size_t availableAmount() const override;
 
-	optional<uint16_t> stream() const;
-	string label() const;
-	string protocol() const;
-	Reliability reliability() const;
+	virtual optional<uint16_t> stream() const;
+	virtual string label() const;
+	virtual string protocol() const;
+	virtual Reliability reliability() const;
 
-	bool isOpen(void) const;
-	bool isClosed(void) const;
-	size_t maxMessageSize() const;
+	virtual bool isOpen(void) const;
+	virtual bool isClosed(void) const;
+	virtual size_t maxMessageSize() const;
 
 	virtual void assignStream(uint16_t stream);
 	virtual void open(shared_ptr<SctpTransport> transport);

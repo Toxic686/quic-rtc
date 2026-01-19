@@ -8,8 +8,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libgcc -static-libstdc++")
 
-# 设置兼容性编译选项
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
+# 设置兼容性编译选项 - 使用 C++11 ABI（与库保持一致）
+# 注意：库使用默认的 C++11 ABI，所以这里不应该禁用
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
 
 # 禁用不必要的功能以减少IO
 set(CMAKE_DISABLE_SOURCE_CHANGES ON)
@@ -62,11 +63,13 @@ if(USE_PRECOMPILED_HEADERS)
     target_precompile_headers(simple-quic-example PRIVATE ${PRECOMPILED_HEADERS})
 endif()
 
+find_package(ZLIB REQUIRED)
 target_link_libraries(simple-quic-example
     datachannel
     lsquic
     OpenSSL::SSL
     OpenSSL::Crypto
+    ZLIB::ZLIB
     pthread
 )
 
@@ -131,13 +134,24 @@ if(USE_PRECOMPILED_HEADERS)
     target_precompile_headers(webrtc-client PRIVATE ${PRECOMPILED_HEADERS})
 endif()
 
+find_package(ZLIB REQUIRED)
+find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
+# 确保 datachannel 库被构建
+add_dependencies(webrtc-client datachannel)
+# 直接链接 datachannel 目标（BUILD_SHARED_LIBS=OFF，所以是静态库）
+# 使用 --whole-archive 确保静态库中的所有符号都被链接
 target_link_libraries(webrtc-client
+    PRIVATE
+    -Wl,--whole-archive
     datachannel
+    -Wl,--no-whole-archive
     lsquic
     OpenSSL::SSL
     OpenSSL::Crypto
-    nlohmann_json
-    pthread
+    ZLIB::ZLIB
+    nlohmann_json::nlohmann_json
+    Threads::Threads
 )
 
 target_include_directories(webrtc-client PRIVATE

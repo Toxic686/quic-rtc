@@ -16,6 +16,7 @@
 #include "init.hpp"
 #include "processor.hpp"
 #include "sctptransport.hpp"
+#include "quicktransport.hpp"
 #include "track.hpp"
 
 #include "rtc/peerconnection.hpp"
@@ -46,9 +47,11 @@ struct PeerConnection : std::enable_shared_from_this<PeerConnection> {
 	shared_ptr<IceTransport> initIceTransport();
 	shared_ptr<DtlsTransport> initDtlsTransport();
 	shared_ptr<SctpTransport> initSctpTransport();
+	shared_ptr<QuicTransport> initQuicTransport();
 	shared_ptr<IceTransport> getIceTransport() const;
 	shared_ptr<DtlsTransport> getDtlsTransport() const;
 	shared_ptr<SctpTransport> getSctpTransport() const;
+	shared_ptr<QuicTransport> getQuicTransport() const;
 	void closeTransports();
 
 	void endLocalCandidates();
@@ -153,6 +156,7 @@ private:
 	shared_ptr<IceTransport> mIceTransport;
 	shared_ptr<DtlsTransport> mDtlsTransport;
 	shared_ptr<SctpTransport> mSctpTransport;
+	shared_ptr<QuicTransport> mQuicTransport;
 
 	std::unordered_map<uint16_t, weak_ptr<DataChannel>> mDataChannels; // by stream ID
 	std::vector<weak_ptr<DataChannel>> mUnassignedDataChannels;

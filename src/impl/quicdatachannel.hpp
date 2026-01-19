@@ -31,28 +31,26 @@ struct QuicDataChannel : DataChannel, std::enable_shared_from_this<QuicDataChann
                     Reliability reliability);
     virtual ~QuicDataChannel();
 
-    // 这些函数在基类中不是虚函数，所以不能覆盖
-    void close();
-    void remoteClose();
-    bool outgoing(message_ptr message);
-    void incoming(message_ptr message);
+    // 覆盖基类 DataChannel 的虚函数，实现 QUIC 发送/接收
+    void close() override;
+    void remoteClose() override;
+    bool outgoing(message_ptr message) override;
+    void incoming(message_ptr message) override;
 
-    // 这些函数在基类中是虚函数，可以覆盖
     optional<message_variant> receive() override;
     optional<message_variant> peek() override;
     size_t availableAmount() const override;
 
-    // 这些函数在基类中不是虚函数，所以不能覆盖
-    optional<uint16_t> stream() const;
-    string label() const;
-    string protocol() const;
-    Reliability reliability() const;
+    optional<uint16_t> stream() const override;
+    string label() const override;
+    string protocol() const override;
+    Reliability reliability() const override;
 
-    bool isOpen(void) const;
-    bool isClosed(void) const;
-    size_t maxMessageSize() const;
+    bool isOpen(void) const override;
+    bool isClosed(void) const override;
+    size_t maxMessageSize() const override;
 
-    virtual void assignStream(uint16_t stream) override;
+    void assignStream(uint16_t stream) override;
     // 添加基类的open函数声明，避免隐藏
     using DataChannel::open;
     virtual void open(shared_ptr<QuicTransport> transport);
@@ -82,6 +80,12 @@ struct OutgoingQuicDataChannel final : public QuicDataChannel {
 
     void open(shared_ptr<QuicTransport> transport) override;
     void processOpenMessage(message_ptr message) override;
+
+private:
+    // QUIC 的 isOpen() 只有在收到 ACK 后才为 true；PeerConnection 会在此之前反复调用 open()。
+    // 这里做幂等保护：同一个 stream 只发送一次 OPEN，避免对端报
+    // "Got open message on already used stream X" 并关闭通道。
+    std::atomic<bool> mOpenSent{false};
 };
 
 struct IncomingQuicDataChannel final : public QuicDataChannel {

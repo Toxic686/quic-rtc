@@ -16,6 +16,8 @@
 #include <chrono>
 #include <cstring>
 #include <exception>
+#include <fstream>
+#include <cstdlib>
 
 #if !USE_GNUTLS
 #ifdef _WIN32
@@ -702,6 +704,26 @@ BIO_METHOD *DtlsTransport::BioMethods = NULL;
 int DtlsTransport::TransportExIndex = -1;
 std::mutex DtlsTransport::GlobalMutex;
 
+namespace {
+// 写入 DTLS Key Log（用于 Wireshark 解密 DTLS 内的 QUIC），默认路径 /tmp/dtls_quic.keys，或由 SSLKEYLOGFILE 环境变量指定
+std::string get_keylog_path() {
+	if (const char *env = std::getenv("SSLKEYLOGFILE")) {
+		return env;
+	}
+	return "/tmp/dtls_quic.keys";
+}
+
+void keylog_callback(const SSL *ssl, const char *line) {
+	(void)ssl;
+	static std::mutex m;
+	std::lock_guard<std::mutex> lock(m);
+	std::ofstream f(get_keylog_path(), std::ios::app);
+	if (f.is_open()) {
+		f << line << '\n';
+	}
+}
+} // namespace
+
 void DtlsTransport::Init() {
 	std::lock_guard lock(GlobalMutex);
 
@@ -756,6 +778,8 @@ DtlsTransport::DtlsTransport(shared_ptr<IceTransport> lower, certificate_ptr cer
 		SSL_CTX_set_read_ahead(mCtx, 1);
 		SSL_CTX_set_quiet_shutdown(mCtx, 0); // send the close_notify alert
 		SSL_CTX_set_info_callback(mCtx, InfoCallback);
+		// 启用 DTLS 密钥日志，便于抓包解密（写入 SSLKEYLOGFILE 或 /tmp/dtls_quic.keys）
+		SSL_CTX_set_keylog_callback(mCtx, keylog_callback);
 
 		SSL_CTX_set_verify(mCtx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
 		                   CertificateCallback);
@@ -979,8 +1003,11 @@ void DtlsTransport::doRecv() {
 					break;
 				}
 
-				if (openssl::check_error(err))
-					recv(make_message(buffer, buffer + ret));
+				if (openssl::check_error(err)) {
+					PLOG_VERBOSE << "DTLS forwarding decrypted data to upper transport, size=" << ret;
+					auto msg = make_message(buffer, buffer + ret);
+					recv(std::move(msg));
+				}
 			}
 		}
 

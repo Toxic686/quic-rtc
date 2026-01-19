@@ -1450,7 +1450,7 @@ int main(int argc, char* argv[]) {
     std::cout << "信令服务器: " << signalingIp << ":" << signalingPort << std::endl;
     std::cout << "本机IP: " << getLocalIp() << std::endl;
     if (runTestSuite) {
-        std::cout << "测试模式: 测试套件（一次连接完成所有测试）" << std::endl;, ccAlgo
+        std::cout << "测试模式: 测试套件（一次连接完成所有测试）" << std::endl;
     } else {
         std::cout << "测试模式: 单次测试" << std::endl;
     }

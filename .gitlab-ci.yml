@@ -1,0 +1,51 @@
+image: ubuntu:22.04
+
+stages:
+  - build
+
+variables:
+  # 避免交互式提示
+  DEBIAN_FRONTEND: noninteractive
+  # 使用 ccache 加速编译
+  CCACHE_DIR: ${CI_PROJECT_DIR}/.ccache
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - .ccache/
+
+before_script:
+  - apt-get update && apt-get install -y 
+    build-essential 
+    cmake 
+    git 
+    pkg-config 
+    ccache 
+    ninja-build 
+    libssl-dev 
+    zlib1g-dev
+  # 配置 git 安全目录，防止 git 命令报错
+  - git config --global --add safe.directory $CI_PROJECT_DIR
+
+# 编译任务：启用 QUIC，自动拉取 BoringSSL
+build-quic:
+  stage: build
+  script:
+    - mkdir -p build
+    - cd build
+    - cmake .. -G Ninja -DENABLE_QUIC=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
+    - ninja
+  artifacts:
+    paths:
+      - build/examples/quic-datachannel-example/webrtc-client
+      - build/examples/quic-datachannel-example/simple-quic-example
+    expire_in: 1 week
+
+# 编译任务：标准版本（SCTP only），用于回归验证
+build-standard:
+  stage: build
+  script:
+    - mkdir -p build-std
+    - cd build-std
+    - cmake .. -G Ninja -DENABLE_QUIC=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
+    - ninja

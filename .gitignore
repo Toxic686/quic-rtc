@@ -1,0 +1,45 @@
+# Prerequisites
+*.d
+*.o
+*.obj
+*.lib
+*.a
+*.dll
+*.so
+*.so.*
+*.dylib
+*.exe
+*.out
+*.app
+
+# Build directories
+build/
+cmake-build-*/
+bin/
+lib/
+
+# IDE/Editor
+.idea/
+.vscode/
+.vs/
+*.swp
+*.swo
+.DS_Store
+*.user
+*.suo
+
+# Logs and Reports
+*.log
+*_reports/
+test_reports/
+quic_test_reports/
+distributed_test_reports/
+
+# Local configuration
+.env
+config.local.json
+
+# Temporary files
+tmp/
+temp/
+*~

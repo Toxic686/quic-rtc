@@ -18,6 +18,8 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-verbose-asm")
 # 自动处理 BoringSSL 依赖
 include(FetchContent)
 
+option(ENABLE_QUIC "Enable QUIC transport support" ON)
+
 if(ENABLE_QUIC)
     # 强制关闭 lsquic 的二进制和测试构建，避免引入 libevent 依赖
     set(LSQUIC_BIN OFF CACHE BOOL "" FORCE)
@@ -29,8 +31,10 @@ if(ENABLE_QUIC)
         
         FetchContent_Declare(
             boringssl
-            GIT_REPOSITORY https://boringssl.googlesource.com/boringssl
-            GIT_TAG        master
+            GIT_REPOSITORY https://github.com/google/boringssl.git
+            GIT_TAG        main
+            GIT_SHALLOW    FALSE
+            SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/boringssl-src-new"
         )
         
         FetchContent_GetProperties(boringssl)
@@ -60,7 +64,9 @@ if(ENABLE_QUIC)
     endif()
 endif()
 
-add_subdirectory(deps/lsquic)
+if(ENABLE_QUIC)
+	add_subdirectory(deps/lsquic)
+endif()
 
 include(GNUInstallDirs)
 
@@ -84,7 +90,6 @@ option(ENABLE_QUIC_TESTS "Enable QUIC tests" ON)
 option(WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(CAPI_STDCALL "Set calling convention of C API callbacks stdcall" OFF)
 option(SCTP_DEBUG "Enable SCTP debugging output to verbose log" OFF)
-option(ENABLE_QUIC "Enable QUIC transport support" ON)
 option(RTC_UPDATE_VERSION_HEADER "Enable updating the version header" OFF)
 
 if (USE_GNUTLS AND USE_MBEDTLS)
@@ -107,6 +112,63 @@ endif()
 
 if(NOT WARNINGS_AS_ERRORS AND NOT USE_SYSTEM_SRTP)
 	option(BUILD_WITH_WARNINGS "Add warning as error flags for libSRTP" OFF)
+endif()
+
+if(NOT USE_GNUTLS AND NOT USE_MBEDTLS)
+	if(APPLE)
+		# This is a bug in CMake that causes it to prefer the system version over
+		# the one in the specified ROOT folder
+		if(EXISTS ${OPENSSL_ROOT_DIR})
+            # Use static files when OPENSSL_USE_STATIC_LIBS is set.
+            # OPENSSL_USE_STATIC_LIBS is what CMake's FindOpenSSL looks at
+            # to decide whether to use static libraries.
+            if(OPENSSL_USE_STATIC_LIBS)
+                set(OPENSSL_CRYPTO_LIBRARY "${OPENSSL_ROOT_DIR}/lib/libcrypto.a" CACHE FILEPATH "" FORCE)
+                set(OPENSSL_SSL_LIBRARY "${OPENSSL_ROOT_DIR}/lib/libssl.a" CACHE FILEPATH "" FORCE)
+            else()
+                set(OPENSSL_CRYPTO_LIBRARY "${OPENSSL_ROOT_DIR}/lib/libcrypto.dylib" CACHE FILEPATH "" FORCE)
+                set(OPENSSL_SSL_LIBRARY "${OPENSSL_ROOT_DIR}/lib/libssl.dylib" CACHE FILEPATH "" FORCE)
+            endif()
+		endif()
+	endif()
+
+	find_package(OpenSSL QUIET)
+
+	if(NOT TARGET OpenSSL::SSL)
+		if(TARGET ssl)
+			add_library(OpenSSL::SSL ALIAS ssl)
+		elseif(OPENSSL_SSL_LIBRARY)
+			add_library(OpenSSL::SSL UNKNOWN IMPORTED)
+			set_target_properties(OpenSSL::SSL PROPERTIES
+				IMPORTED_LOCATION "${OPENSSL_SSL_LIBRARY}"
+			)
+			if(EXISTS "${OPENSSL_INCLUDE_DIR}")
+				set_target_properties(OpenSSL::SSL PROPERTIES
+					INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
+				)
+			endif()
+		endif()
+	endif()
+
+	if(NOT TARGET OpenSSL::Crypto)
+		if(TARGET crypto)
+			add_library(OpenSSL::Crypto ALIAS crypto)
+		elseif(OPENSSL_CRYPTO_LIBRARY)
+			add_library(OpenSSL::Crypto UNKNOWN IMPORTED)
+			set_target_properties(OpenSSL::Crypto PROPERTIES
+				IMPORTED_LOCATION "${OPENSSL_CRYPTO_LIBRARY}"
+			)
+			if(EXISTS "${OPENSSL_INCLUDE_DIR}")
+				set_target_properties(OpenSSL::Crypto PROPERTIES
+					INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
+				)
+			endif()
+		endif()
+	endif()
+
+	if(NOT TARGET OpenSSL::SSL OR NOT TARGET OpenSSL::Crypto)
+		find_package(OpenSSL REQUIRED)
+	endif()
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
@@ -492,23 +554,13 @@ elseif(USE_MBEDTLS)
 	target_link_libraries(datachannel PRIVATE MbedTLS::MbedTLS)
 	target_link_libraries(datachannel-static PRIVATE MbedTLS::MbedTLS)
 else()
-	if(APPLE)
-		# This is a bug in CMake that causes it to prefer the system version over
-		# the one in the specified ROOT folder
-		if(EXISTS ${OPENSSL_ROOT_DIR})
-            # Use static files when OPENSSL_USE_STATIC_LIBS is set.
-            # OPENSSL_USE_STATIC_LIBS is what CMake's FindOpenSSL looks at
-            # to decide whether to use static libraries.
-            if(OPENSSL_USE_STATIC_LIBS)
-                set(OPENSSL_CRYPTO_LIBRARY "${OPENSSL_ROOT_DIR}/lib/libcrypto.a" CACHE FILEPATH "" FORCE)
-                set(OPENSSL_SSL_LIBRARY "${OPENSSL_ROOT_DIR}/lib/libssl.a" CACHE FILEPATH "" FORCE)
-            else()
-                set(OPENSSL_CRYPTO_LIBRARY "${OPENSSL_ROOT_DIR}/lib/libcrypto.dylib" CACHE FILEPATH "" FORCE)
-                set(OPENSSL_SSL_LIBRARY "${OPENSSL_ROOT_DIR}/lib/libssl.dylib" CACHE FILEPATH "" FORCE)
-            endif()
+	if(NOT TARGET OpenSSL::SSL OR NOT TARGET OpenSSL::Crypto)
+		# Only require OpenSSL if we haven't already defined the targets manually above
+		if(NOT TARGET OpenSSL::SSL OR NOT TARGET OpenSSL::Crypto)
+			find_package(OpenSSL REQUIRED)
 		endif()
 	endif()
-	find_package(OpenSSL REQUIRED)
+
 	target_compile_definitions(datachannel PRIVATE USE_GNUTLS=0)
 	target_compile_definitions(datachannel-static PRIVATE USE_GNUTLS=0)
 	target_link_libraries(datachannel PRIVATE OpenSSL::SSL)
@@ -678,7 +730,9 @@ if(NOT NO_EXAMPLES)
 	endif()
 	add_subdirectory(examples/copy-paste)
 	add_subdirectory(examples/copy-paste-capi)
-	add_subdirectory(examples/transport-quic)
+	if(ENABLE_QUIC AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/transport-quic/CMakeLists.txt")
+		add_subdirectory(examples/transport-quic)
+	endif()
 	
 	# 添加QUIC数据通道示例
 	if(ENABLE_QUIC)

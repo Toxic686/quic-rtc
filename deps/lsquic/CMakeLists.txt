@@ -165,6 +165,12 @@ IF (NOT DEFINED BORINGSSL_INCLUDE AND DEFINED BORINGSSL_DIR)
                 PATHS ${BORINGSSL_DIR}/include
                 NO_DEFAULT_PATH)
 ENDIF()
+
+# Allow passing BORINGSSL_INCLUDE directly
+IF (NOT BORINGSSL_INCLUDE AND DEFINED CACHE{BORINGSSL_INCLUDE})
+    SET(BORINGSSL_INCLUDE $CACHE{BORINGSSL_INCLUDE})
+ENDIF()
+
 # This must be done before adding other include directories to take
 # precedence over header files from other SSL installs.
 
@@ -172,7 +178,7 @@ IF (BORINGSSL_INCLUDE)
     MESSAGE(STATUS "BoringSSL include directory ${BORINGSSL_INCLUDE}")
     INCLUDE_DIRECTORIES(${BORINGSSL_INCLUDE})
 ELSE()
-    MESSAGE(FATAL_ERROR "BoringSSL headers not found")
+    MESSAGE(STATUS "BoringSSL headers not found - assuming targets are already configured or will be handled by parent project")
 ENDIF()
 
 IF (NOT DEFINED BORINGSSL_LIB AND DEFINED BORINGSSL_DIR)
@@ -207,6 +213,12 @@ ELSE()
         #   set(BORINGSSL_LIB_ssl ssl)
         #   set(BORINGSSL_LIB_crypto crypto)
         #   add_subdirectory(third_party/lsquic)
+        
+        # Check cache if variable is not set
+        IF (NOT BORINGSSL_LIB_${LIB_NAME} AND DEFINED CACHE{BORINGSSL_LIB_${LIB_NAME}})
+            SET(BORINGSSL_LIB_${LIB_NAME} $CACHE{BORINGSSL_LIB_${LIB_NAME}})
+        ENDIF()
+
         IF (DEFINED BORINGSSL_LIB)
             IF (CMAKE_SYSTEM_NAME STREQUAL Windows)
                 FIND_LIBRARY(BORINGSSL_LIB_${LIB_NAME}
@@ -225,7 +237,7 @@ ELSE()
         IF(BORINGSSL_LIB_${LIB_NAME})
             MESSAGE(STATUS "Found ${LIB_NAME} library: ${BORINGSSL_LIB_${LIB_NAME}}")
         ELSE()
-            MESSAGE(FATAL_ERROR "BORINGSSL_LIB_${LIB_NAME} library not found")
+            MESSAGE(STATUS "BORINGSSL_LIB_${LIB_NAME} library not found - assuming handled by parent project")
         ENDIF()
     ENDFOREACH()
 

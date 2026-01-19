@@ -24,7 +24,7 @@ if(ENABLE_QUIC)
     set(LSQUIC_TEST OFF CACHE BOOL "" FORCE)
     
     # 检查是否手动提供了 BoringSSL 路径
-    if(NOT BORINGSSL_DIR AND NOT OPENSSL_ROOT_DIR)
+    if(NOT BORINGSSL_DIR)
         message(STATUS "未检测到 BoringSSL，准备自动下载并编译...")
         
         FetchContent_Declare(
@@ -56,7 +56,7 @@ if(ENABLE_QUIC)
             set(BORINGSSL_INCLUDE ${boringssl_SOURCE_DIR}/include CACHE PATH "" FORCE)
         endif()
     else()
-        message(STATUS "使用外部提供的 BoringSSL: ${OPENSSL_ROOT_DIR}")
+        message(STATUS "使用外部提供的 BoringSSL: ${BORINGSSL_DIR}")
     endif()
 endif()
 

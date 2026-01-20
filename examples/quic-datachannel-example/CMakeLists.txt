@@ -53,45 +53,7 @@ else()
     set(USE_PRECOMPILED_HEADERS FALSE)
 endif()
 
-# 编译所有目标用于端到端测试
-add_executable(simple-quic-example
-    simple_example.cpp
-)
 
-# 设置预编译头文件（如果可用）
-if(USE_PRECOMPILED_HEADERS)
-    target_precompile_headers(simple-quic-example PRIVATE ${PRECOMPILED_HEADERS})
-endif()
-
-find_package(ZLIB REQUIRED)
-target_link_libraries(simple-quic-example
-    datachannel
-    lsquic
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    ZLIB::ZLIB
-    pthread
-)
-
-target_include_directories(simple-quic-example PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../src
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../deps/lsquic/include
-)
-
-# 编译选项
-target_compile_options(simple-quic-example PRIVATE
-    -pipe                    # 减少临时文件IO
-    -O0                      # 无优化，最快编译
-    -fno-inline             # 禁用内联，减少编译时间
-    -fno-omit-frame-pointer # 保留帧指针，减少编译复杂度
-)
-
-# 设置编译缓存
-set_target_properties(simple-quic-example PROPERTIES
-    COMPILE_FLAGS "-H"
-    CXX_COMPILER_LAUNCHER "ccache"
-)
 
 # 信令服务器
 add_executable(signaling-server
@@ -128,6 +90,8 @@ set_target_properties(signaling-server PROPERTIES
 # WebRTC客户端
 add_executable(webrtc-client
     webrtc_client.cpp
+    utils/SignalingClient.cpp
+    utils/TrafficStats.cpp
 )
 
 if(USE_PRECOMPILED_HEADERS)
@@ -158,6 +122,7 @@ target_include_directories(webrtc-client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../../src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../deps/lsquic/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils
 )
 
 target_compile_options(webrtc-client PRIVATE
@@ -174,7 +139,6 @@ set_target_properties(webrtc-client PROPERTIES
 
 # 打印配置信息
 message(STATUS "QUIC DataChannel Example Configuration (端到端测试版本):")
-message(STATUS "  - Simple Example: simple-quic-example")
 message(STATUS "  - Signaling Server: signaling-server")
 message(STATUS "  - WebRTC Client: webrtc-client")
 if(USE_PRECOMPILED_HEADERS)

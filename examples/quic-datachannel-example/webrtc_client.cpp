@@ -1,5 +1,7 @@
 #include <rtc/rtc.hpp>
 #include <nlohmann/json.hpp>
+#include "SignalingClient.hpp"
+#include "TrafficStats.hpp"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -64,81 +66,30 @@ std::string getLocalIp() {
     return inet_ntoa(addr.sin_addr);
 }
 
-static std::vector<int> parseCsvInts(const std::string &csv) {
-    std::vector<int> out;
-    std::string cur;
-    auto pushOne = [&](const std::string &s) {
-        if (s.empty()) return;
-        try {
-            int v = std::stoi(s);
-            if (v > 0) out.push_back(v);
-        } catch (...) {
-            // ignore bad token
-        }
-    };
-    for (char ch : csv) {
-        if (ch == ',' || ch == ';' || ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
-            pushOne(cur);
-            cur.clear();
-        } else {
-            cur.push_back(ch);
-        }
-    }
-    pushOne(cur);
-    if (out.empty())
-        out.push_back(1024);
-    return out;
-}
-
-static std::string humanSizeLabel(int bytes) {
-    if (bytes % (1024 * 1024) == 0) return std::to_string(bytes / (1024 * 1024)) + "MB";
-    if (bytes % 1024 == 0) return std::to_string(bytes / 1024) + "KB";
-    return std::to_string(bytes) + "B";
-}
-
 class WebRTCClient {
 private:
-    std::shared_ptr<rtc::WebSocket> mWebSocket;
+    std::shared_ptr<SignalingClient> mSignaling;
     std::shared_ptr<rtc::PeerConnection> mPeerConnection;
     std::shared_ptr<rtc::DataChannel> mDataChannel;
+    TrafficStats mStats;
+
     std::string mClientId;
     bool mIsOfferer;
     bool mUseQuic;
-    std::atomic<bool> mConnected; // 跨线程：WebSocket 回调写，主线程读
-    bool mOfferSent;
-    bool mAnswerSent;
-    bool mPerformanceTestRun;  // 新增：防止重复运行性能测试
-    std::atomic<bool> mDataChannelOpen;    // 数据通道是否真正打开（跨线程：DataChannel 回调写，主线程读）
-    bool mRunTestSuite;      // 是否运行测试套件
-    std::atomic<bool> mConnectionFailed;  // 连接是否已失败/关闭（用于提前退出等待）
-    std::optional<rtc::QuicCongestionControl> mCcAlgo; // 拥塞控制算法
+    bool mPerformanceTestRun;
+    std::atomic<bool> mDataChannelOpen;
+    bool mRunTestSuite;
+    std::atomic<bool> mConnectionFailed;
+    std::optional<rtc::QuicCongestionControl> mCcAlgo;
 
-    // answerer 侧接收进度统计（避免“没输出，不知道跑没跑完”）
-    size_t mRxPrintEvery;  // 每 N 条打印一次（0=不打印）
-    uint64_t mRxTotal = 0;
-    std::unordered_map<size_t, uint64_t> mRxCountBySize;
-    std::mutex mRxMutex;
-
-    // TEST_BEGIN/END 端到端校验：answerer 统计实际收到的数据量并回传 TEST_ACK
-    struct TestRxState {
-        bool active = false;
-        std::string name;
-        uint64_t seq = 0;
-        uint64_t bytes = 0;
-        uint64_t msgs = 0;
-        std::chrono::steady_clock::time_point start{};
-    };
-    TestRxState mTestRx;
-
+    // Test ACK logic (offerer side only)
     std::mutex mTestAckMutex;
-    std::condition_variable mTestAckCv;
-    // offerer：每个测试一个递增 seq，ACK 按 seq 匹配，避免 name 字符串微差/早到导致卡住
     uint64_t mNextTestSeq = 0;
     uint64_t mExpectedAckSeq = 0;
-    std::string mExpectedAckName;             // 仅用于打印/冗余校验
+    std::string mExpectedAckName;
 
     uint64_t mLastAckSeq = 0;
-    std::atomic<uint64_t> mLastAckSeqAtomic{0}; // 用于等待线程无锁观察 ACK 到达
+    std::atomic<uint64_t> mLastAckSeqAtomic{0};
     std::string mLastAckName;
     uint64_t mLastAckBytes = 0;
     uint64_t mLastAckMsgs = 0;
@@ -291,8 +242,6 @@ private:
 
                 // 处理 answerer 回传的 TEST_ACK（不依赖 mIsOfferer，避免角色标志异常导致 ACK 丢失）
                 std::string ackMsg = sliceFromKeyword(parseLine, "TEST_ACK|");
-                // 兜底：有些情况下字符串看起来以 TEST_ACK 开头，但字节流里可能被插入不可见字节或其他前缀，
-                // 导致关键字匹配失败。此时用字段集合识别 ACK，保证不会卡住测试流程。
                 if (ackMsg.empty()) {
                     const bool ackLike =
                         parseLine.find("name=") != std::string::npos &&
@@ -325,7 +274,6 @@ private:
                         mLastAckBytes = bytesStr.empty() ? 0 : std::stoull(bytesStr);
                         mLastAckMsgs = msgsStr.empty() ? 0 : std::stoull(msgsStr);
                         mLastAckDurationMs = durStr.empty() ? 0 : std::stoull(durStr);
-                        // 在同一临界区内更新 atomic，避免任何可见性/竞态疑虑
                         mLastAckSeqAtomic.store(seqVal, std::memory_order_release);
                     }
                     if (ackTraceEnabled()) {
@@ -351,17 +299,11 @@ private:
                         const auto end = beginMsg.find('|', start);
                         return beginMsg.substr(start, end == std::string::npos ? std::string::npos : end - start);
                     };
-                    std::lock_guard<std::mutex> lk(mRxMutex);
-                    mTestRx.active = true;
-                    mTestRx.name = normalizeTestName(getField("name"));
-                    {
-                        const std::string seqStr = getField("seq");
-                        mTestRx.seq = seqStr.empty() ? 0 : std::stoull(seqStr);
-                    }
-                    mTestRx.bytes = 0;
-                    mTestRx.msgs = 0;
-                    mTestRx.start = std::chrono::steady_clock::now();
-                    std::cout << "🧪 [TEST] BEGIN: " << mTestRx.name << std::endl;
+                    std::string name = normalizeTestName(getField("name"));
+                    std::string seqStr = getField("seq");
+                    uint64_t seq = seqStr.empty() ? 0 : std::stoull(seqStr);
+                    mStats.startTest(name, seq);
+                    std::cout << "🧪 [TEST] BEGIN: " << name << std::endl;
                 } else if (!mIsOfferer && !endMsg.empty()) {
                     auto getField = [&](const std::string& key) -> std::string {
                         const std::string pattern = key + "=";
@@ -374,20 +316,17 @@ private:
                     const std::string name = normalizeTestName(getField("name"));
                     const std::string seqStr = getField("seq");
                     const uint64_t endSeq = seqStr.empty() ? 0 : std::stoull(seqStr);
+                    
                     uint64_t bytes = 0, msgs = 0, durMs = 0;
-                    {
-                        std::lock_guard<std::mutex> lk(mRxMutex);
-                        if (mTestRx.active &&
-                            (mTestRx.seq == endSeq || endSeq == 0) &&
-                            (mTestRx.name == name || name.empty())) {
-                            bytes = mTestRx.bytes;
-                            msgs = mTestRx.msgs;
-                            durMs = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now() - mTestRx.start
-                            ).count();
-                            mTestRx.active = false;
-                        }
+                    if (mStats.isActive() && 
+                        (mStats.getTestSeq() == endSeq || endSeq == 0) &&
+                        (mStats.getTestName() == name || name.empty())) {
+                        bytes = mStats.getTestBytes();
+                        msgs = mStats.getTestMessages();
+                        durMs = mStats.getDurationMs();
+                        mStats.endTest();
                     }
+                    
                     if (mDataChannel) {
                         std::string ack =
                             std::string("TEST_ACK|name=") + (name.empty() ? "N/A" : name) +
@@ -419,28 +358,12 @@ private:
             } else {
                 auto& binary = std::get<std::vector<std::byte>>(msg);
                 const size_t sz = binary.size();
-                uint64_t total = 0;
-                uint64_t bySize = 0;
-                {
-                    std::lock_guard<std::mutex> lk(mRxMutex);
-                    total = ++mRxTotal;
-                    bySize = ++mRxCountBySize[sz];
-                }
-
-                // 低噪声输出：每 N 条打印一次（默认 answerer: N=100；可用 RTC_RX_PRINT_EVERY 覆盖）
-                if (mRxPrintEvery > 0 && (bySize == 1 || (bySize % mRxPrintEvery) == 0)) {
-                    std::cout << "收到二进制消息，大小: " << sz
-                              << " 字节；该大小累计: " << bySize
-                              << "；总累计: " << total << std::endl;
-                }
-
-                // answerer：如果处于某个测试窗口内，累计收到的 bytes/msg 数
-                if (!mIsOfferer) {
-                    std::lock_guard<std::mutex> lk(mRxMutex);
-                    if (mTestRx.active) {
-                        mTestRx.bytes += sz;
-                        mTestRx.msgs += 1;
-                    }
+                mStats.addBytes(sz);
+                
+                uint64_t total = mStats.getTotalMessages();
+                if (total > 0 && total % 100 == 0) {
+                     std::cout << "收到二进制消息，大小: " << sz
+                              << " 字节；总累计: " << total << std::endl;
                 }
             }
         });
@@ -456,60 +379,47 @@ public:
     WebRTCClient(bool useQuic = true, bool isOfferer = true, const std::string& signalingIp = "127.0.0.1", int signalingPort = 8080, bool runTestSuite = false, std::optional<rtc::QuicCongestionControl> ccAlgo = std::nullopt) 
         : mIsOfferer(isOfferer),
           mUseQuic(useQuic),
-          mConnected(false),
-          mOfferSent(false),
-          mAnswerSent(false),
           mPerformanceTestRun(false),
           mDataChannelOpen(false),
           mRunTestSuite(runTestSuite),
           mConnectionFailed(false),
-          mCcAlgo(ccAlgo),
-          // 默认：offerer 不打印接收进度；answerer 每 100 条打印一次（可用 RTC_RX_PRINT_EVERY 覆盖）
-          mRxPrintEvery(envSize("RTC_RX_PRINT_EVERY", isOfferer ? 0 : 100)) {
+          mCcAlgo(ccAlgo) {
         
-        // 创建WebSocket客户端
-        mWebSocket = std::make_shared<rtc::WebSocket>();
-        
-        // 设置WebSocket事件处理器
-        mWebSocket->onOpen([this]() {
-            std::cout << "WebSocket连接已建立" << std::endl;
-            // 连接建立后等待服务器发送连接确认
-        });
-        
-        mWebSocket->onMessage([this](rtc::message_variant msg) {
-            if (std::holds_alternative<std::string>(msg)) {
-                handleWebSocketMessage(std::get<std::string>(msg));
+        // Initialize signaling client
+        mSignaling = std::make_shared<SignalingClient>(signalingIp, signalingPort);
+
+        mSignaling->onConnected([this](std::string clientId) {
+            mClientId = clientId;
+            std::cout << "客户端ID: " << mClientId << std::endl;
+            if (mIsOfferer) {
+                std::cout << "开始创建PeerConnection..." << std::endl;
+                createPeerConnection();
+                createOffer();
             }
         });
-        
-        mWebSocket->onClosed([]() {
-            std::cout << "WebSocket连接已关闭" << std::endl;
+
+        mSignaling->onOffer([this](const json& data) {
+            handleOffer(data);
         });
-        
-        mWebSocket->onError([](std::string error) {
-            std::cerr << "WebSocket错误: " << error << std::endl;
+
+        mSignaling->onAnswer([this](const json& data) {
+            handleAnswer(data);
         });
-    
-        // 自动连接到信令服务器
-        std::string uri = "ws://" + signalingIp + ":" + std::to_string(signalingPort);
-        std::cout << "连接到信令服务器: " << uri << std::endl;
-        mWebSocket->open(uri);
-        
-        // 等待连接确认，本地测试使用较短时间，远程测试使用较长时间
-        // 跨区域测试可能需要更长时间，根据网络延迟动态调整
+
+        mSignaling->onIceCandidate([this](const json& data) {
+            handleIceCandidate(data);
+        });
+
+        mSignaling->connect();
+
+        // Wait for connection
         int waitTime = (signalingIp == "127.0.0.1" || signalingIp == "localhost") ? 3 : 30;
         std::cout << "等待连接确认，超时时间: " << waitTime << " 秒..." << std::endl;
         
-        auto start = std::chrono::steady_clock::now();
-        while (!mConnected.load(std::memory_order_acquire) &&
-               std::chrono::steady_clock::now() - start < std::chrono::seconds(waitTime)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        
-        if (!mConnected.load(std::memory_order_acquire)) {
-            std::cout << "警告: 未收到连接确认消息，但继续尝试..." << std::endl;
-        } else {
+        if (mSignaling->waitForConnection(waitTime)) {
             std::cout << "已收到连接确认消息" << std::endl;
+        } else {
+            std::cout << "警告: 未收到连接确认消息，但继续尝试..." << std::endl;
         }
     }
     
@@ -538,18 +448,13 @@ public:
         }
         
         // 最后断开WebSocket
-        if (mWebSocket) {
-            try {
-            mWebSocket->close();
-            } catch (...) {
-                // 忽略关闭时的异常
-            }
-            mWebSocket.reset();
+        if (mSignaling) {
+            mSignaling->disconnect();
         }
         
         // 重置状态标志
         mPerformanceTestRun = false;
-        mConnected.store(false, std::memory_order_release);
+        mStats.reset();
         mConnectionFailed.store(false, std::memory_order_release);  // 重置连接失败标志
     }
     
@@ -817,7 +722,7 @@ public:
         // 可配置：基础性能曲线（默认只跑 1KB）
         // 示例：RTC_TEST2_SIZES="1024,4096,16384"
         const std::string t2SizesCsv = envStr("RTC_TEST2_SIZES", "1024,4096,16384");
-        const std::vector<int> t2Sizes = parseCsvInts(t2SizesCsv);
+        const std::vector<int> t2Sizes = TrafficStats::parseCsvInts(t2SizesCsv);
         std::cout << "基础性能测试 sizes: " << t2SizesCsv << std::endl;
         for (int sz : t2Sizes) {
             int currentCount = perfCount;
@@ -829,7 +734,7 @@ public:
                 currentCount = (int)(maxBytes / sz);
                 if (currentCount < 5) currentCount = 5; // 至少跑 5 条
             }
-            const std::string label = humanSizeLabel(sz);
+            const std::string label = TrafficStats::humanSizeLabel(sz);
             if (!runPerformanceTest(sz, currentCount, "基础性能测试 (" + label + ", " + std::to_string(currentCount) + "条)")) return;
         }
         
@@ -976,40 +881,7 @@ public:
     }
     
 private:
-    void handleWebSocketMessage(const std::string& message) {
-        try {
-            json data = json::parse(message);
-            std::string type = data["type"];
-            
-            std::cout << "收到信令消息: " << type << std::endl;
-            
-            if (type == "connected") {
-                mClientId = data["clientId"];
-                mConnected.store(true, std::memory_order_release);
-                std::cout << "客户端ID: " << mClientId << std::endl;
-                
-                // 连接确认后，如果是发起方则开始创建连接
-                if (mIsOfferer) {
-                    std::cout << "开始创建PeerConnection..." << std::endl;
-                    createPeerConnection();
-                    createOffer();
-                }
-            } else if (type == "offer") {
-                handleOffer(data);
-            } else if (type == "answer") {
-                handleAnswer(data);
-            } else if (type == "ice-candidate") {
-                handleIceCandidate(data);
-            } else if (type == "pong") {
-                // 处理pong消息，保持连接活跃
-                std::cout << "收到pong消息" << std::endl;
-            } else {
-                std::cout << "未知消息类型: " << type << std::endl;
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "解析消息失败: " << e.what() << std::endl;
-        }
-    }
+
     
     void createPeerConnection() {
         // 创建PeerConnection配置
@@ -1174,29 +1046,19 @@ private:
             // 根据角色发送不同的消息
             if (mIsOfferer && description.typeString() == "offer") {
                 // 发起方发送offer到信令服务器
-                json offerMsg = {
-                    {"type", "offer"},
-                    {"sdp", sdpContent}
-                };
-                
                 try {
-                    mWebSocket->send(offerMsg.dump());
+                    mSignaling->sendOffer(sdpContent);
                     std::cout << "已发送offer到信令服务器" << std::endl;
-                    mOfferSent = true;
+                    // mOfferSent = true; // variable removed
                 } catch (const std::exception& e) {
                     std::cerr << "发送offer失败: " << e.what() << std::endl;
                 }
             } else if (!mIsOfferer && description.typeString() == "answer") {
                 // 应答方发送answer到信令服务器
-                json answerMsg = {
-                    {"type", "answer"},
-                    {"sdp", description}
-                };
-                
                 try {
-                    mWebSocket->send(answerMsg.dump());
+                    mSignaling->sendAnswer(std::string(description));
                     std::cout << "已发送answer到信令服务器" << std::endl;
-                    mAnswerSent = true;
+                    // mAnswerSent = true; // variable removed
                 } catch (const std::exception& e) {
                     std::cerr << "发送answer失败: " << e.what() << std::endl;
                 }
@@ -1234,15 +1096,8 @@ private:
             
             // 发送ICE候选项到信令服务器
             // 注意：rtc::Candidate没有mlineindex()方法，我们使用默认值0
-            json iceMsg = {
-                {"type", "ice-candidate"},
-                {"candidate", candidate.candidate()},
-                {"sdpMid", candidate.mid()},
-                {"sdpMLineIndex", 0}  // 使用默认值，因为rtc::Candidate没有mlineindex()方法
-            };
-            
             try {
-            mWebSocket->send(iceMsg.dump());
+                mSignaling->sendIceCandidate(candidate.candidate(), candidate.mid(), 0);
             } catch (const std::exception& e) {
                 std::cerr << "发送ICE候选项失败: " << e.what() << std::endl;
             }

@@ -387,7 +387,8 @@ set_target_properties(datachannel PROPERTIES
 	VERSION ${PROJECT_VERSION}
 	SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
 	CXX_STANDARD 17
-	CXX_VISIBILITY_PRESET default)
+	CXX_VISIBILITY_PRESET default
+	OUTPUT_NAME kratos-rtc)
 if(APPLE)
 	set_target_properties(datachannel PROPERTIES
 		VERSION ${PROJECT_VERSION_MAJOR}
@@ -401,7 +402,8 @@ add_library(datachannel-static STATIC EXCLUDE_FROM_ALL
 	${LIBDATACHANNEL_IMPL_HEADERS})
 set_target_properties(datachannel-static PROPERTIES
 	VERSION ${PROJECT_VERSION}
-	CXX_STANDARD 17)
+	CXX_STANDARD 17
+	OUTPUT_NAME kratos-rtc)
 
 target_compile_definitions(datachannel PRIVATE RTC_EXPORTS)
 if (NOT BUILD_SHARED_LIBS)
@@ -629,7 +631,7 @@ if(WARNINGS_AS_ERRORS)
 	endif()
 endif()
 
-install(TARGETS datachannel EXPORT LibDataChannelTargets
+install(TARGETS datachannel datachannel-static EXPORT LibDataChannelTargets
 	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -678,7 +680,7 @@ if(NOT NO_TESTS)
 	set_target_properties(datachannel-tests PROPERTIES
 		VERSION ${PROJECT_VERSION}
 		CXX_STANDARD 17
-		OUTPUT_NAME tests)
+		OUTPUT_NAME kratos-tests)
 
 	set_target_properties(datachannel-tests PROPERTIES
 		XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER com.github.paullouisageneau.libdatachannel.tests)
@@ -697,7 +699,7 @@ if(NOT NO_TESTS)
 	set_target_properties(datachannel-benchmark PROPERTIES
 		VERSION ${PROJECT_VERSION}
 		CXX_STANDARD 17
-		OUTPUT_NAME benchmark)
+		OUTPUT_NAME kratos-benchmark)
 
 	set_target_properties(datachannel-benchmark PROPERTIES
 		XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER com.github.paullouisageneau.libdatachannel.benchmark)
@@ -716,24 +718,6 @@ if(NOT NO_EXAMPLES)
 		add_subdirectory(deps/json EXCLUDE_FROM_ALL)
 	endif()
 
-	if(NOT NO_WEBSOCKET)
-		add_subdirectory(examples/client)
-		add_subdirectory(examples/client-benchmark)
-	endif()
-	if(NOT NO_MEDIA)
-		add_subdirectory(examples/media-receiver)
-		add_subdirectory(examples/media-sender)
-		add_subdirectory(examples/media-sfu)
-	endif()
-	if(NOT NO_MEDIA AND NOT NO_WEBSOCKET)
-    	add_subdirectory(examples/streamer)
-	endif()
-	add_subdirectory(examples/copy-paste)
-	add_subdirectory(examples/copy-paste-capi)
-	if(ENABLE_QUIC AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/transport-quic/CMakeLists.txt")
-		add_subdirectory(examples/transport-quic)
-	endif()
-	
 	# 添加QUIC数据通道示例
 	if(ENABLE_QUIC)
 		add_subdirectory(examples/quic-datachannel-example)

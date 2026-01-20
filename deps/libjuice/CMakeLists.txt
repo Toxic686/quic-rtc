@@ -147,7 +147,7 @@ add_library(LibJuice::LibJuice ALIAS juice)
 set_target_properties(juice-static PROPERTIES EXPORT_NAME LibJuiceStatic)
 add_library(LibJuice::LibJuiceStatic ALIAS juice-static)
 
-install(TARGETS juice EXPORT LibJuiceTargets
+install(TARGETS juice juice-static EXPORT LibJuiceTargets
 	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

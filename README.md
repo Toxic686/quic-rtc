@@ -1,4 +1,4 @@
-# QUIC-RTC: 高性能QUIC传输的WebRTC实现
+# KratosRTC: 高性能QUIC传输的WebRTC实现
 
 [![License: MPL-2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
@@ -7,7 +7,7 @@
 
 ## 🚀 项目简介
 
-**QUIC-RTC** 是一个基于 [libdatachannel](https://github.com/paullouisageneau/libdatachannel) 的高性能QUIC传输WebRTC实现。本项目集成了现代QUIC协议栈，为实时通信应用提供低延迟、高吞吐量的数据传输能力。
+**KratosRTC** (原 QUIC-RTC) 是一个基于 [libdatachannel](https://github.com/paullouisageneau/libdatachannel) 的高性能QUIC传输WebRTC实现。本项目集成了现代QUIC协议栈，为实时通信应用提供低延迟、高吞吐量的数据传输能力.
 
 ### ✨ 核心特性
 
@@ -30,7 +30,7 @@
 ## 🏗️ 项目架构
 
 ```
-QUIC-RTC/
+KratosRTC/
 ├── 📁 src/                    # 核心源代码
 │   ├── impl/                  # 实现层
 │   │   ├── quicdatachannel.cpp    # QUIC数据通道实现
@@ -41,7 +41,6 @@ QUIC-RTC/
 │   └── rtc/                   # RTC接口定义
 ├── 📁 examples/               # 示例代码
 │   ├── quic-datachannel-example/  # QUIC数据通道示例
-│   ├── transport-quic/            # QUIC传输示例
 │   └── ...
 ├── 📁 deps/                   # 依赖库
 │   ├── lsquic/                # QUIC协议栈
@@ -66,6 +65,50 @@ QUIC-RTC/
 - **日志**: [plog](https://github.com/SergiusTheBest/plog)
 - **JSON**: [nlohmann/json](https://github.com/nlohmann/json)
 - **媒体**: [libsrtp](https://github.com/cisco/libsrtp)
+
+---
+
+## 💻 SDK 集成指南
+
+### CMake 集成
+
+本项目支持标准的 CMake `find_package` 机制。安装后，您可以在自己的项目中通过以下方式集成：
+
+**1. 在您的 `CMakeLists.txt` 中查找包：**
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(my-quic-app)
+
+# 查找 LibDataChannel 包
+find_package(LibDataChannel REQUIRED)
+
+add_executable(my-app main.cpp)
+
+# 链接库
+target_link_libraries(my-app PRIVATE LibDataChannel::LibDataChannel)
+
+# 如果使用静态库链接，可能需要手动处理一些依赖（通常 CMake 会自动处理 transitive dependencies）
+# target_link_libraries(my-app PRIVATE LibDataChannel::LibDataChannelStatic)
+```
+
+**2. 在代码中引入头文件：**
+
+```cpp
+#include <rtc/rtc.hpp>
+
+int main() {
+    rtc::Configuration config;
+    config.enableQuicTransport = true;
+    // ...
+    return 0;
+}
+```
+
+### 注意事项
+
+- **QUIC 支持**: 确保在构建您的应用时，链接的 `LibDataChannel` 库是开启了 QUIC 支持的版本（即编译 SDK 时使用了 `-DENABLE_QUIC=ON`）。
+- **依赖库**: 如果使用静态库链接，确保系统已安装 OpenSSL/BoringSSL 等必要依赖，或者让 CMake 能够找到它们。
 
 ---
 
@@ -99,8 +142,8 @@ brew install cmake openssl
 
 ```bash
 # 克隆项目
-git clone https://github.com/Toxic686/quic-rtc.git
-cd quic-rtc
+git clone https://github.com/Toxic686/kratos-rtc.git
+cd kratos-rtc
 
 # 创建构建目录
 cmake -B build -DENABLE_QUIC=ON
@@ -276,8 +319,8 @@ chmod +x quic_performance_test.sh
 ### 开发环境设置
 ```bash
 # 克隆开发分支
-git clone -b develop https://github.com/Toxic686/quic-rtc.git
-cd quic-rtc
+git clone -b develop https://github.com/Toxic686/kratos-rtc.git
+cd kratos-rtc
 
 # 安装开发依赖
 sudo apt install clang-format cppcheck valgrind
@@ -305,9 +348,9 @@ make check
 
 ## 📞 联系我们
 
-- **项目主页**: [https://github.com/Toxic686/quic-rtc](https://github.com/Toxic686/quic-rtc)
-- **问题反馈**: [Issues](https://github.com/Toxic686/quic-rtc/issues)
-- **讨论交流**: [Discussions](https://github.com/Toxic686/quic-rtc/discussions)
+- **项目主页**: [https://github.com/Toxic686/kratos-rtc](https://github.com/Toxic686/kratos-rtc)
+- **问题反馈**: [Issues](https://github.com/Toxic686/kratos-rtc/issues)
+- **讨论交流**: [Discussions](https://github.com/Toxic686/kratos-rtc/discussions)
 - **微信公众号**: 四夕君的记忆宫殿 📱
 
 ---
@@ -318,5 +361,5 @@ make check
 
 ---
 
-*最后更新: 2026年1月19日*
+*最后更新: 2026年1月20日*
 

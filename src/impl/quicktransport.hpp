@@ -67,6 +67,12 @@ public:
         bool supportNstp = true;                        // 支持NSTP
         bool delayedAcks = true;                        // 启用延迟ACK
         QuicCongestionControl congestionControl = QuicCongestionControl::Default; // 拥塞控制算法
+
+        // BBRv1 Tuning
+        optional<unsigned> bbrMinRttExpiry;
+        optional<unsigned> bbrInitCwnd;
+        optional<float> bbrCwndGain;
+        optional<float> bbrPacingGain;
     };
 
     // 构造函数 - 创建QUIC传输层对象
@@ -116,7 +122,8 @@ private:
         STREAM_BINARY = 53,               // 二进制流 - 用于传输完整二进制数据
         STREAM_STRING_PARTIAL = 54,       // 部分字符串流 - 用于传输部分字符串数据
         STREAM_STRING_EMPTY = 56,         // 空字符串流 - 用于传输空字符串
-        STREAM_BINARY_EMPTY = 57          // 空二进制流 - 用于传输空二进制数据
+        STREAM_BINARY_EMPTY = 57,         // 空二进制流 - 用于传输空二进制数据
+        STREAM_DATAGRAM = 60              // 数据报 - 用于不可靠传输
     };
 
     // QUIC连接上下文结构体 - 管理QUIC连接和流
@@ -146,6 +153,8 @@ private:
     static void on_stream_read(lsquic_stream_t *stream, lsquic_stream_ctx_t *h);
     static void on_stream_write(lsquic_stream_t *stream, lsquic_stream_ctx_t *h);
     static void on_stream_close(lsquic_stream_t *stream, lsquic_stream_ctx_t *h);
+    static void on_datagram(lsquic_conn_t *c, const void *buf, size_t sz);
+    static void on_dg_write(lsquic_conn_t *c);
     static int send_packets_out(void *ctx, const struct lsquic_out_spec *specs, unsigned n_specs);
     static void on_hsk_done(lsquic_conn_t *c, enum lsquic_hsk_status s);
 

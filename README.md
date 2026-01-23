@@ -305,6 +305,14 @@ chmod +x quic_performance_test.sh
 
 ---
 
+## 📖 文档
+
+- [**架构设计与原理文档**](docs/ARCHITECTURE.md): 详细介绍了项目的分层架构、连接建立流程、数据发送/接收流程（Reliable Stream vs Unreliable Datagram）以及核心技术点。
+- [构建指南](docs/BUILDING.md) (待补充)
+- [API 参考](docs/API.md) (待补充)
+
+---
+
 ## 🤝 贡献指南
 
 我们欢迎所有形式的贡献！请查看我们的贡献指南：

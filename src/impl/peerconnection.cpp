@@ -406,7 +406,17 @@ shared_ptr<QuicTransport> PeerConnection::initQuicTransport() {
 		if (config.quicPingPeriod.has_value())
 			settings.pingPeriod = config.quicPingPeriod->count() * 1000; // 转换为微秒
         if (config.quicCongestionControl.has_value())
-            settings.congestionControl = config.quicCongestionControl.value();
+			settings.congestionControl = config.quicCongestionControl.value();
+
+        // BBRv1 Tuning
+        if (config.bbrMinRttExpiry.has_value())
+            settings.bbrMinRttExpiry = config.bbrMinRttExpiry.value();
+        if (config.bbrInitCwnd.has_value())
+            settings.bbrInitCwnd = config.bbrInitCwnd.value();
+        if (config.bbrCwndGain.has_value())
+            settings.bbrCwndGain = config.bbrCwndGain.value();
+        if (config.bbrPacingGain.has_value())
+            settings.bbrPacingGain = config.bbrPacingGain.value();
 
 		// 根据远程描述类型决定QUIC模式
 		// 如果远程描述是Offer → 我们是Answerer → SERVER模式

@@ -106,6 +106,12 @@ struct RTC_CPP_EXPORT Configuration {
 	optional<std::chrono::milliseconds> quicPingPeriod = std::chrono::milliseconds(30000);
     optional<QuicCongestionControl> quicCongestionControl;
 
+    // BBRv1 Tuning Parameters
+    optional<unsigned> bbrMinRttExpiry;      // Microseconds, default 10s
+    optional<unsigned> bbrInitCwnd;          // Packets, default 32
+    optional<float> bbrCwndGain;             // Float, default 2.0
+    optional<float> bbrPacingGain;           // Float, default 2.885
+
 	// Certificates and private keys
 	optional<string> certificatePemFile;
 	optional<string> keyPemFile;

@@ -209,6 +209,19 @@ QuicTransport::QuicTransport(shared_ptr<Transport> lower, const Configuration &c
     mEngineSettings.es_max_plpmtu = mEngineSettings.es_base_plpmtu;
     // 向对端宣告：我们最多愿意接收的 QUIC UDP payload
     mEngineSettings.es_max_udp_payload_size_rx = kQuicMinInitialUdpPayload;
+    
+    // 启用 Datagram 扩展 (RFC 9221)
+    mEngineSettings.es_datagrams = 1;
+
+    // BBRv1 Tuning
+    if (settings.bbrMinRttExpiry.has_value())
+        mEngineSettings.es_bbr_min_rtt_expiry = settings.bbrMinRttExpiry.value();
+    if (settings.bbrInitCwnd.has_value())
+        mEngineSettings.es_bbr_init_cwnd = settings.bbrInitCwnd.value();
+    if (settings.bbrCwndGain.has_value())
+        mEngineSettings.es_bbr_cwnd_gain = settings.bbrCwndGain.value();
+    if (settings.bbrPacingGain.has_value())
+        mEngineSettings.es_bbr_pacing_gain = settings.bbrPacingGain.value();
 
     // 设置lsquic流回调函数结构体
     mStreamCallbacks = {
@@ -219,9 +232,9 @@ QuicTransport::QuicTransport(shared_ptr<Transport> lower, const Configuration &c
         .on_read = on_stream_read,            // 流读取回调函数
         .on_write = on_stream_write,          // 流写入回调函数
         .on_close = on_stream_close,          // 流关闭回调函数
-        .on_dg_write = nullptr,               // 数据报写入回调（未使用）
-        .on_datagram = nullptr,               // 数据报接收回调（未使用）
-        .on_hsk_done = on_hsk_done,          // 握手完成回调函数
+        .on_dg_write = on_dg_write,           // 数据报写入回调
+        .on_datagram = on_datagram,           // 数据报接收回调
+        .on_hsk_done = on_hsk_done,           // 握手完成回调函数
         .on_new_token = nullptr,              // 新令牌回调（未使用）
         .on_sess_resume_info = nullptr,       // 会话恢复信息回调（未使用）
         .on_reset = nullptr,                  // 重置回调（未使用）
@@ -718,6 +731,54 @@ bool QuicTransport::trySendMessage(message_ptr message) {
     
     // 通过QUIC流发送消息
     if (mConnCtx && mConnCtx->conn) {  // 如果连接上下文和连接都存在
+        // 0) 检查是否应走 Datagram (不可靠/无序传输)
+        bool useDatagram = false;
+        if (message->reliability) {
+            const auto &r = *message->reliability;
+            // 只要设置了部分可靠性参数或 unordered，就使用 Datagram
+            if (r.unordered || r.maxRetransmits.has_value() || r.maxPacketLifeTime.has_value()) {
+                useDatagram = true;
+            }
+        }
+
+        if (useDatagram) {
+            uint16_t sid = static_cast<uint16_t>(message->stream);
+            // Payload format: [StreamID (4 bytes)][Data]
+            // Note: Data 已经被 send() 加上了 [Kind][Len] 帧头，这里再加一层 Datagram 路由头
+            size_t totalLen = 4 + message->size();
+            
+            // lsquic 可能限制 Datagram 大小（通常 ~1200 字节）。若超限则无法发送。
+            // 这里暂不做分片，超大包直接丢弃或由 lsquic 拒绝。
+            std::vector<unsigned char> buf(totalLen);
+            
+            // Write StreamID (Big Endian)
+            buf[0] = static_cast<unsigned char>((sid >> 24) & 0xFF);
+            buf[1] = static_cast<unsigned char>((sid >> 16) & 0xFF);
+            buf[2] = static_cast<unsigned char>((sid >> 8) & 0xFF);
+            buf[3] = static_cast<unsigned char>(sid & 0xFF);
+            
+            // Copy message data
+            if (message->size() > 0) {
+                std::memcpy(buf.data() + 4, message->data(), message->size());
+            }
+
+            ssize_t sent = lsquic_conn_write_datagram(mConnCtx->conn, buf.data(), buf.size());
+            if (sent > 0) {
+                mBytesSent += static_cast<size_t>(sent);
+                // 触发一次引擎处理，尽快把 Datagram 刷到底层
+                processEngineOnce("datagram_sent");
+                return true;
+            } else {
+                // 发送失败（如缓冲区满、包过大）。对于不可靠通道，直接丢弃。
+                if (quic_trace_enabled()) {
+                    std::cerr << "   ⚠️ [QUIC] Datagram 发送丢弃/失败, stream=" << sid 
+                              << ", len=" << totalLen << ", ret=" << sent << ", errno=" << errno << std::endl;
+                }
+                // 返回 true 表示“已处理（丢弃）”，将从队列中移除
+                return true;
+            }
+        }
+
         // 1) 若该 stream 已存在，复用同一个 QUIC stream（DataChannel 语义：一个通道固定一个 stream）
         {
             std::lock_guard<std::mutex> lock(mConnCtx->streamsMutex);
@@ -1092,6 +1153,73 @@ void QuicTransport::on_stream_close(lsquic_stream_t *stream, lsquic_stream_ctx_t
         streamCtx->isClosed = true;  // 设置关闭标志
         delete streamCtx;            // 删除流上下文
     }
+}
+
+// 数据报接收回调 (RFC 9221)
+void QuicTransport::on_datagram(lsquic_conn_t *c, const void *buf, size_t sz) {
+    auto *connCtx = reinterpret_cast<QuicConnCtx *>(lsquic_conn_get_ctx(c));
+    if (!connCtx || !connCtx->transport) return;
+    
+    // Framing check: 至少包含 4 字节 StreamID + 1 字节 Kind + 4 字节 Len = 9 字节
+    if (sz < 9) {
+        if (quic_trace_enabled()) {
+            std::cerr << "   ⚠️ [QUIC] 收到过短 Datagram (" << sz << " bytes), 丢弃" << std::endl;
+        }
+        return;
+    }
+
+    const uint8_t *p = static_cast<const uint8_t *>(buf);
+    // 1. 解析 StreamID (Big Endian, 4 bytes)
+    uint32_t id32 = (uint32_t(p[0]) << 24) | 
+                    (uint32_t(p[1]) << 16) | 
+                    (uint32_t(p[2]) << 8)  | 
+                    (uint32_t(p[3]));
+    uint16_t streamId = static_cast<uint16_t>(id32);
+
+    // 2. 解析 Kind (1 byte)
+    uint8_t kind = p[4];
+
+    // 3. 解析 Length (Big Endian, 4 bytes)
+    uint32_t len = (uint32_t(p[5]) << 24) | 
+                   (uint32_t(p[6]) << 16) | 
+                   (uint32_t(p[7]) << 8)  | 
+                   (uint32_t(p[8]));
+
+    // 校验完整性
+    if (sz < 9 + len) {
+        if (quic_trace_enabled()) {
+            std::cerr << "   ⚠️ [QUIC] Datagram 长度校验失败: declared=" << len << ", actual=" << (sz - 9) << std::endl;
+        }
+        return;
+    }
+
+    if (quic_trace_enabled()) {
+        std::cout << "   📥 [QUIC] 收到 Datagram: stream=" << streamId << ", kind=" << int(kind) << ", len=" << len << std::endl;
+    }
+
+    // 映射消息类型
+    Message::Type type = Message::Type::Binary;
+    switch (kind) {
+    case 0: type = Message::Control; break;
+    case 1: type = Message::String;  break;
+    case 2: type = Message::Binary;  break;
+    case 3: type = Message::Reset;   break;
+    default: type = Message::Binary; break;
+    }
+
+    // 提取负载并交付
+    binary payload = make_binary_from_chars(p + 9, len);
+    auto msg = make_message(std::move(payload), type, streamId);
+    
+    connCtx->transport->recv(std::move(msg));
+    connCtx->transport->mBytesReceived += len;
+}
+
+// 数据报可写回调
+void QuicTransport::on_dg_write(lsquic_conn_t *c) {
+    // 当 lsquic 内部 Datagram 缓冲区有空间时被调用。
+    // 目前采用 fire-and-forget 策略（发送满则丢弃），暂不需要在此回调中补发。
+    (void)c;
 }
 
 bool QuicTransport::processEngineOnce(const char *reason) {

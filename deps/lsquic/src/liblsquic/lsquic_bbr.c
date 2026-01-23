@@ -128,7 +128,6 @@ static const size_t kGainCycleLength = sizeof(kPacingGain)
 /* From net/quic/quic_flags_list.h */
 #define kCwndGain 2.0
 
-
 static uint64_t lsquic_bbr_get_cwnd (void *);
 
 
@@ -174,13 +173,13 @@ init_bbr (struct lsquic_bbr *bbr)
     bbr->bbr_aggregation_epoch_start_time = 0;
     bbr->bbr_min_rtt = 0;
     bbr->bbr_min_rtt_timestamp = 0;
-    bbr->bbr_init_cwnd = kInitialCongestionWindow * kDefaultTCPMSS;
-    bbr->bbr_cwnd = kInitialCongestionWindow * kDefaultTCPMSS;
+    bbr->bbr_init_cwnd = bbr->bbr_conn_pub->enpub->enp_settings.es_bbr_init_cwnd * kDefaultTCPMSS;
+    bbr->bbr_cwnd = bbr->bbr_conn_pub->enpub->enp_settings.es_bbr_init_cwnd * kDefaultTCPMSS;
     bbr->bbr_max_cwnd = kDefaultMaxCongestionWindowPackets * kDefaultTCPMSS;
     bbr->bbr_min_cwnd = kDefaultMinimumCongestionWindow;
-    bbr->bbr_high_gain = kDefaultHighGain;
-    bbr->bbr_high_cwnd_gain = kDefaultHighGain;
-    bbr->bbr_drain_gain = 1.0f / kDefaultHighGain;
+    bbr->bbr_high_gain = bbr->bbr_conn_pub->enpub->enp_settings.es_bbr_pacing_gain;
+    bbr->bbr_high_cwnd_gain = bbr->bbr_conn_pub->enpub->enp_settings.es_bbr_pacing_gain;
+    bbr->bbr_drain_gain = 1.0f / bbr->bbr_conn_pub->enpub->enp_settings.es_bbr_pacing_gain;
     bbr->bbr_pacing_rate = BW_ZERO();
     bbr->bbr_pacing_gain = 1.0;
     bbr->bbr_cwnd_gain = 1.0;
@@ -474,7 +473,7 @@ update_bandwidth_and_min_rtt (struct lsquic_bbr *bbr)
                     = MIN(bbr->bbr_min_rtt_since_last_probe, sample_min_rtt);
 
     min_rtt_expired = bbr->bbr_min_rtt != 0 && (bbr->bbr_ack_state.ack_time
-                                > bbr->bbr_min_rtt_timestamp + kMinRttExpiry);
+                                > bbr->bbr_min_rtt_timestamp + bbr->bbr_conn_pub->enpub->enp_settings.es_bbr_min_rtt_expiry);
     if (min_rtt_expired || sample_min_rtt < bbr->bbr_min_rtt
                                                     || 0 == bbr->bbr_min_rtt)
     {
@@ -690,7 +689,7 @@ enter_probe_bw_mode (struct lsquic_bbr *bbr, lsquic_time_t now)
     uint8_t rand;
 
     set_mode(bbr, BBR_MODE_PROBE_BW);
-    bbr->bbr_cwnd_gain = kCwndGain;
+    bbr->bbr_cwnd_gain = bbr->bbr_conn_pub->enpub->enp_settings.es_bbr_cwnd_gain;
 
     // Pick a random offset for the gain cycle out of {0, 2..7} range. 1 is
     // excluded because in that case increased gain and decreased gain would not

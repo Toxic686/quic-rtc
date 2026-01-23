@@ -405,6 +405,12 @@ lsquic_engine_init_settings (struct lsquic_engine_settings *settings,
     settings->es_check_tp_sanity = LSQUIC_DF_CHECK_TP_SANITY;
     settings->es_amp_factor      = LSQUIC_DF_AMP_FACTOR;
     settings->es_send_verneg     = LSQUIC_DF_SEND_VERNEG;
+
+    /* BBR defaults */
+    settings->es_bbr_min_rtt_expiry = 10 * 1000 * 1000; /* 10 seconds */
+    settings->es_bbr_init_cwnd      = 32;
+    settings->es_bbr_cwnd_gain      = 2.0f;
+    settings->es_bbr_pacing_gain    = 2.885f;
 }
 
 

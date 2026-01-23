@@ -1153,7 +1153,13 @@ struct lsquic_engine_settings {
      * Default value is @ref LSQUIC_DF_MAX_WEBTRANSPORT_SERVER_STREAMS.
      */
     unsigned        es_max_webtransport_server_streams;
-#endif    
+#endif
+
+    /* BBRv1 Configuration Parameters */
+    unsigned        es_bbr_min_rtt_expiry;      /* Microseconds */
+    unsigned        es_bbr_init_cwnd;           /* Packets */
+    float           es_bbr_cwnd_gain;           /* Float */
+    float           es_bbr_pacing_gain;         /* Float */
 };
 
 /* Initialize `settings' to default values */

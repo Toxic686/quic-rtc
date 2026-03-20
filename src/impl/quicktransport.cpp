@@ -1418,14 +1418,28 @@ void QuicTransport::periodicProcessConnections() {
     // 处理连接，这会触发keepalive（PING帧）的发送
     processEngineOnce("periodic");
     
+    // 动态调整定时器间隔 (Pacing 核心逻辑)
+    // lsquic_engine_earliest_adv_tick() 返回微秒级绝对时间戳，指示引擎希望下次被处理的时间
+    int diff;
+    int timeout;
+    if (lsquic_engine_earliest_adv_tick(mEngine, &diff)) {
+        // diff 是距离现在的微秒数
+        // 向上取整到毫秒，且至少等待 1ms 以避免空转
+        timeout = (diff + 999) / 1000;
+        if (timeout < 1) timeout = 1;
+        // 设置上限 200ms，避免过久不处理
+        if (timeout > 200) timeout = 200;
+    } else {
+        // 引擎没有明确建议，使用默认心跳间隔 (100ms)
+        timeout = 100;
+    }
+
     // 如果定期处理仍然激活，且状态不是Disconnected或Failed，安排下一次处理
-    // 使用100ms的间隔，这足够频繁以保持连接活跃，又不会太频繁
-    // 注意：即使在Connecting状态也要继续处理，以便及时处理到达的数据包
     if (mPeriodicProcessingActive.load()) {
         State currentState = state();
         if (currentState != State::Disconnected && currentState != State::Failed) {
             ThreadPool::Instance().schedule(
-                std::chrono::milliseconds(100),
+                std::chrono::milliseconds(timeout),
                 [weak_this = weak_from_this()]() {
                     if (auto locked = weak_this.lock()) {
                         locked->periodicProcessConnections();

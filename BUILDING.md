@@ -1,87 +1,85 @@
-# libdatachannel - Building instructions
+# KratosRTC - Building Instructions
 
-## Clone repository
+KratosRTC uses CMake and builds the vendored dependencies in this repository. When `ENABLE_QUIC=ON`, it also needs BoringSSL for `lsquic`.
 
-```bash
-$ git clone https://github.com/paullouisageneau/libdatachannel.git
-```
+The default build downloads a pinned BoringSSL commit with CMake `FetchContent`, so clean machines and CI use the same crypto dependency revision.
 
-## Init submodules
+## Requirements
 
-This step is optional if `PREFER_SYSTEM_LIB` CMake option will be enabled.
+- CMake 3.16+
+- A C++17 compiler
+- Perl, required by `lsquic`
+- Go, required by BoringSSL
+- zlib development headers
 
-```bash
-$ cd libdatachannel
-$ git submodule update --init --recursive --depth 1
-```
-
-## Build with CMake
-
-The CMake library targets `libdatachannel` and `libdatachannel-static` respectively correspond to the shared and static libraries. The default target will build tests and examples.
-
-Options `USE_GNUTLS` and `USE_MBEDTLS` allow to switch the cryptographic backend to GnuTLS and Mbed TLS respectively, otherwise OpenSSL is selected by default. The option `USE_NICE` allows to switch between libjuice as submodule (default) and libnice as system library.
-
-The option `PREFER_SYSTEM_LIB` allows to link against the system library rather than building all the submodule. Options `USE_SYSTEM_SRTP`, `USE_SYSTEM_JUICE`, `USE_SYSTEM_USRSCTP`, `USE_SYSTEM_PLOG` and `USE_SYSTEM_JSON` allow to do the same but per submodule, for libsrtp, libjuice, libusrsctp, Plog and Nlohmann JSON respectively.
-
-If you only need Data Channels, the option `NO_MEDIA` allows to make the library lighter by removing media support. Similarly, `NO_WEBSOCKET` removes WebSocket support.
-
-For the sake of performance, the library should be compiled in `Release` mode if you don't plan to debug it.
-
-The CMake build exports the targets with namespace `LibDataChannel::LibDataChannel` and `LibDataChannel::LibDataChannelStatic` to link the library from another CMake project.
-
-### POSIX-compliant operating systems (including Linux and Apple macOS)
+Linux example:
 
 ```bash
-$ cmake -B build -DUSE_GNUTLS=0 -DUSE_NICE=0 -DCMAKE_BUILD_TYPE=Release
-$ cd build
-$ make -j2
+sudo apt-get update
+sudo apt-get install -y build-essential cmake ninja-build perl golang zlib1g-dev
 ```
 
-### Apple macOS with Xcode project
-
-To generate an Xcode project in the `build` directory:
+macOS example:
 
 ```bash
-$ cmake -B build -G Xcode -DUSE_GNUTLS=0 -DUSE_NICE=0
+brew install cmake ninja go
 ```
 
-#### Solving "Could NOT find OpenSSL" error
-
-You need to add OpenSSL root directory if the build fails with the following message:
-
-```
-Could NOT find OpenSSL, try to set the path to OpenSSL root folder in the system variable OPENSSL_ROOT_DIR (missing: OPENSSL_CRYPTO_LIBRARY OPENSSL_INCLUDE_DIR)
-```
-
-For example:
+## Standard QUIC Build
 
 ```bash
-$ cmake -B build -G Xcode -DUSE_GNUTLS=0 -DUSE_NICE=0 -DOPENSSL_ROOT_DIR=/usr/local/Cellar/openssl\@1.1/1.1.1h/
+cmake -S . -B build -G Ninja -DENABLE_QUIC=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
-### Microsoft Windows with MinGW cross-compilation
+The first configure/build will fetch and compile the pinned BoringSSL revision.
+
+## Use A Local BoringSSL
+
+Use this when building offline or when reusing an existing BoringSSL checkout:
 
 ```bash
-$ cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=/usr/share/mingw/toolchain-x86_64-w64-mingw32.cmake # replace with your toolchain file
-$ cd build
-$ make -j2
+cmake -S . -B build -G Ninja \
+  -DENABLE_QUIC=ON \
+  -DBORINGSSL_DIR=/path/to/boringssl \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
-### Microsoft Windows with Microsoft Visual C++
+If `BORINGSSL_DIR` points to BoringSSL sources, KratosRTC builds it with `add_subdirectory`. If it points to a prebuilt tree, also pass `BORINGSSL_LIB` when the libraries are not under the usual `ssl` and `crypto` subdirectories:
 
 ```bash
-$ cmake -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
-$ cd build
-$ nmake
+cmake -S . -B build -G Ninja \
+  -DENABLE_QUIC=ON \
+  -DKRATOSRTC_BORINGSSL_BUILD_FROM_SOURCE=OFF \
+  -DBORINGSSL_DIR=/path/to/boringssl \
+  -DBORINGSSL_LIB=/path/to/boringssl/build \
+  -DCMAKE_BUILD_TYPE=Release
 ```
 
-## Build directly with Make (Linux only)
-
-Options `USE_GNUTLS` and `USE_MBEDTLS` allow to switch the cryptographic backend to GnuTLS and Mbed TLS respectively, otherwise OpenSSL is selected by default. The option `USE_NICE` allows to switch between libjuice as submodule (default) and libnice as system library.
-
-If you only need Data Channels, the option `NO_MEDIA` removes media support. Similarly, `NO_WEBSOCKET` removes WebSocket support.
+## Non-QUIC Build
 
 ```bash
-$ make USE_GNUTLS=0 USE_NICE=0
+cmake -S . -B build -G Ninja -DENABLE_QUIC=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
+## Useful Options
+
+- `ENABLE_QUIC=ON`: enable QUIC transport support.
+- `KRATOSRTC_FETCH_BORINGSSL=ON`: fetch the pinned BoringSSL revision automatically.
+- `KRATOSRTC_BORINGSSL_GIT_TAG=<commit>`: override the pinned BoringSSL commit for experiments.
+- `BORINGSSL_DIR=/path/to/boringssl`: use a local BoringSSL source or build directory.
+- `NO_TESTS=ON`: skip test targets for faster SDK builds.
+- `NO_EXAMPLES=ON`: skip example targets.
+- `NO_MEDIA=ON`: build a smaller DataChannel-focused SDK.
+- `NO_WEBSOCKET=ON`: build without WebSocket support.
+
+## CI Baseline
+
+The GitHub Actions build uses the same baseline command:
+
+```bash
+cmake -S . -B build -G Ninja -DENABLE_QUIC=ON -DNO_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 2
+```

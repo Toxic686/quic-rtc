@@ -10,9 +10,6 @@
 *   **`quic_performance_test.sh`**
     *   **定位**: 自动化性能测试脚本。
     *   **功能**: 一键运行完整的 QUIC 性能基准测试，覆盖不同包大小 (1KB-1MB)、高并发场景及长时间稳定性测试。
-*   **`simple_example.cpp`**
-    *   **定位**: 极简入门示例。
-    *   **功能**: 演示最基础的 QUIC DataChannel 创建与消息收发，代码量少，适合学习 API 用法。
 *   **`signaling_server.cpp`**
     *   **定位**: 基础信令服务器。
     *   **功能**: 基于 WebSocket 的简单信令交换服务，用于协助 P2P 连接建立。
@@ -23,26 +20,17 @@
 
 ```bash
 # 在项目根目录执行
-mkdir build
-cd build
 # -DENABLE_QUIC=ON 开启 QUIC 支持
-# CMake 会自动通过 FetchContent 下载并编译 BoringSSL
-cmake .. -DENABLE_QUIC=ON
-make -j4
+# CMake 会自动通过 FetchContent 下载并编译固定版本 BoringSSL
+cmake -S . -B build -DENABLE_QUIC=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
 编译完成后，会在 `build/examples/quic-datachannel-example/` 目录下生成可执行文件。
 
 ## 🚀 快速开始
 
-### 1. 运行极简示例
-最快验证环境是否正常：
-```bash
-./examples/quic-datachannel-example/simple-quic-example
-```
-如果看到 "QUIC DataChannel示例已启动" 且成功收发消息，说明环境无误。
-
-### 2. 手动运行端到端测试
+### 1. 手动运行端到端测试
 
 需要打开三个终端窗口：
 
@@ -64,7 +52,7 @@ make -j4
 ./examples/quic-datachannel-example/webrtc-client quic offerer 127.0.0.1 8080 --cc bbr --test-suite
 ```
 
-### 3. 运行自动化性能测试脚本
+### 2. 运行自动化性能测试脚本
 这是进行基准测试的推荐方式：
 
 ```bash

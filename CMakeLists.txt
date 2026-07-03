@@ -14,57 +14,16 @@ set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -pipe -O1")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-verbose-asm")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-verbose-asm")
 
-# 集成lsquic源码
-# 自动处理 BoringSSL 依赖
-include(FetchContent)
-
 option(ENABLE_QUIC "Enable QUIC transport support" ON)
 
 if(ENABLE_QUIC)
-    # 强制关闭 lsquic 的二进制和测试构建，避免引入 libevent 依赖
-    set(LSQUIC_BIN OFF CACHE BOOL "" FORCE)
-    set(LSQUIC_TEST OFF CACHE BOOL "" FORCE)
-    
-    # 检查是否手动提供了 BoringSSL 路径
-    if(NOT BORINGSSL_DIR)
-        message(STATUS "未检测到 BoringSSL，准备自动下载并编译...")
-        
-        FetchContent_Declare(
-            boringssl
-            GIT_REPOSITORY https://github.com/google/boringssl.git
-            GIT_TAG        main
-            GIT_SHALLOW    FALSE
-            SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/boringssl-src-new"
-        )
-        
-        FetchContent_GetProperties(boringssl)
-        if(NOT boringssl_POPULATED)
-            FetchContent_Populate(boringssl)
-            
-            # 配置 BoringSSL 目录结构供后续使用
-            set(BORINGSSL_DIR ${boringssl_SOURCE_DIR})
-            set(BORINGSSL_INCLUDE_DIR ${boringssl_SOURCE_DIR}/include)
-            
-            # 将 BoringSSL 作为子项目添加
-            add_subdirectory(${boringssl_SOURCE_DIR} ${boringssl_BINARY_DIR} EXCLUDE_FROM_ALL)
-            
-            # 设置 OpenSSL 相关的变量，以便 FindOpenSSL 或其他模块能找到它
-            # 注意：BoringSSL 构建目标通常是 crypto 和 ssl
-            set(OPENSSL_INCLUDE_DIR ${boringssl_SOURCE_DIR}/include CACHE PATH "" FORCE)
-            set(OPENSSL_CRYPTO_LIBRARY crypto CACHE FILEPATH "" FORCE)
-            set(OPENSSL_SSL_LIBRARY ssl CACHE FILEPATH "" FORCE)
-            
-            # 为 lsquic 准备变量
-            set(BORINGSSL_LIB_crypto crypto CACHE FILEPATH "" FORCE)
-            set(BORINGSSL_LIB_ssl ssl CACHE FILEPATH "" FORCE)
-            set(BORINGSSL_INCLUDE ${boringssl_SOURCE_DIR}/include CACHE PATH "" FORCE)
-        endif()
-    else()
-        message(STATUS "使用外部提供的 BoringSSL: ${BORINGSSL_DIR}")
-    endif()
-endif()
+	# 强制关闭 lsquic 的二进制和测试构建，避免引入 libevent 依赖
+	set(LSQUIC_BIN OFF CACHE BOOL "" FORCE)
+	set(LSQUIC_TESTS OFF CACHE BOOL "" FORCE)
+	set(LSQUIC_TEST OFF CACHE BOOL "" FORCE)
 
-if(ENABLE_QUIC)
+	include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/KratosRTCConfigureBoringSSL.cmake)
+	kratosrtc_configure_boringssl()
 	add_subdirectory(deps/lsquic)
 endif()
 
@@ -132,7 +91,9 @@ if(NOT USE_GNUTLS AND NOT USE_MBEDTLS)
 		endif()
 	endif()
 
-	find_package(OpenSSL QUIET)
+	if(NOT TARGET OpenSSL::SSL OR NOT TARGET OpenSSL::Crypto)
+		find_package(OpenSSL QUIET)
+	endif()
 
 	if(NOT TARGET OpenSSL::SSL)
 		if(TARGET ssl)
@@ -601,8 +562,8 @@ if(ENABLE_QUIC)
 	find_package(ZLIB REQUIRED)
 	target_compile_definitions(datachannel PRIVATE ENABLE_QUIC=1)
 	target_compile_definitions(datachannel-static PRIVATE ENABLE_QUIC=1)
-	target_link_libraries(datachannel PRIVATE lsquic ZLIB::ZLIB)
-	target_link_libraries(datachannel-static PRIVATE lsquic ZLIB::ZLIB)
+	target_link_libraries(datachannel PRIVATE lsquic OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
+	target_link_libraries(datachannel-static PRIVATE lsquic OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
 endif()
 
 if(CAPI_STDCALL)
@@ -728,33 +689,3 @@ endif()
 #if(ENABLE_QUIC_TESTS AND ENABLE_QUIC)
 #	add_subdirectory(test)
 #endif()
-
-# 添加 lsquic 依赖到 datachannel
-find_package(ZLIB REQUIRED)
-if(ENABLE_QUIC)
-    # 如果是自动下载的 BoringSSL，直接链接 target
-    if(TARGET ssl AND TARGET crypto)
-        target_link_libraries(datachannel
-            PRIVATE
-            lsquic
-            ssl
-            crypto
-            ZLIB::ZLIB
-        )
-        target_include_directories(datachannel PRIVATE
-            "${BORINGSSL_INCLUDE_DIR}"
-        )
-    else()
-        # 否则尝试使用 OpenSSL::SSL/Crypto (假设由 find_package(OpenSSL) 找到)
-        target_link_libraries(datachannel
-            PRIVATE
-            lsquic
-            OpenSSL::Crypto
-            OpenSSL::SSL
-            ZLIB::ZLIB
-        )
-        target_include_directories(datachannel PRIVATE
-            "${OPENSSL_INCLUDE_DIR}"
-        )
-    endif()
-endif()

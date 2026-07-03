@@ -1,4 +1,4 @@
-# KratosRTC: 高性能QUIC传输的WebRTC实现
+# KratosRTC: Native QUIC DataChannel SDK
 
 [![License: MPL-2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
@@ -7,13 +7,15 @@
 
 ## 🚀 项目简介
 
-**KratosRTC** (原 QUIC-RTC) 是一个基于 [libdatachannel](https://github.com/paullouisageneau/libdatachannel) 的高性能QUIC传输WebRTC实现。本项目集成了现代QUIC协议栈，为实时通信应用提供低延迟、高吞吐量的数据传输能力.
+**KratosRTC** (原 QUIC-RTC) 是一个基于 [libdatachannel](https://github.com/paullouisageneau/libdatachannel) 的 native C++ RTC 实验性 SDK，目标是在保留 WebRTC ICE/DTLS 建链能力的基础上，为 native 两端提供 QUIC-backed DataChannel 传输能力。
+
+当前 QUIC DataChannel 是项目内的 native 协议扩展，不等同于浏览器标准 WebRTC DataChannel，也不承诺与浏览器原生 DataChannel 直接互通。
 
 ### ✨ 核心特性
 
 - **🚀 QUIC传输**: 基于lsquic的现代QUIC协议实现
-- **🌐 WebRTC兼容**: 完全兼容标准WebRTC DataChannel
-- **⚡ 高性能**: 优化的传输性能，支持BBRv3拥塞控制
+- **🌐 WebRTC建链复用**: 复用 libdatachannel 的 ICE/DTLS 建链、候选项收集和信令模型
+- **⚡ 拥塞控制配置**: 支持 Cubic、BBRv1 和 Adaptive 策略，并暴露部分 BBRv1 调优参数
 - **🔧 可扩展**: 模块化设计，易于扩展和定制
 - **📱 跨平台**: 支持Linux、Windows、macOS等主流平台
 
@@ -126,19 +128,19 @@ int main() {
 ```bash
 # Ubuntu/Debian
 sudo apt update
-sudo apt install build-essential cmake libssl-dev
+sudo apt install build-essential cmake ninja-build perl golang zlib1g-dev
 
 # CentOS/RHEL
 sudo yum groupinstall "Development Tools"
-sudo yum install cmake openssl-devel
+sudo yum install cmake ninja-build perl golang zlib-devel
 
 # macOS
-brew install cmake openssl
+brew install cmake ninja go
 ```
 
 ### 编译项目
 
-本项目已集成 BoringSSL 的自动下载与编译，无需手动预装 QUIC 相关依赖。
+本项目已集成 BoringSSL 的自动下载与编译，并固定到明确的 commit。普通用户无需手动预装 QUIC 相关依赖；如果需要离线构建或复用本地 BoringSSL，也可以通过 `BORINGSSL_DIR` 指定路径。
 
 ```bash
 # 克隆项目
@@ -146,10 +148,10 @@ git clone https://github.com/Toxic686/kratos-rtc.git
 cd kratos-rtc
 
 # 创建构建目录
-cmake -B build -DENABLE_QUIC=ON
+cmake -S . -B build -DENABLE_QUIC=ON -DCMAKE_BUILD_TYPE=Release
 
-# 编译 (BoringSSL 会在第一次构建时自动下载)
-cmake --build build -j$(nproc)
+# 编译 (BoringSSL 会在第一次构建时自动下载固定版本)
+cmake --build build --parallel
 
 # 安装 SDK (默认安装到系统目录)
 sudo cmake --install build
@@ -157,8 +159,17 @@ sudo cmake --install build
 
 **编译选项说明：**
 *   `-DENABLE_QUIC=ON`: 开启 QUIC 支持（默认开启，会自动处理 BoringSSL 依赖）。
-*   `-DENABLE_OPENSSL=ON`: 使用 OpenSSL 作为 DTLS 后端（默认开启）。
+*   `-DKRATOSRTC_FETCH_BORINGSSL=ON`: 自动下载固定版本 BoringSSL（默认开启）。
+*   `-DBORINGSSL_DIR=/path/to/boringssl`: 使用本地 BoringSSL 源码或预编译目录，适合离线构建或复用已有依赖。
+*   QUIC 构建会把 `OpenSSL::SSL` / `OpenSSL::Crypto` 映射到 BoringSSL，避免 lsquic 和 DTLS 混用不同 crypto provider。
 *   `lsquic` 的二进制示例和测试已默认关闭，因此**无需安装 libevent**。
+
+使用本地 BoringSSL 的示例：
+
+```bash
+cmake -S . -B build -DENABLE_QUIC=ON -DBORINGSSL_DIR=/path/to/boringssl -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+```
 
 ### 运行示例
 
@@ -214,19 +225,19 @@ cd examples/quic-datachannel-example
 ## 🔮 未来规划
 
 ### 🚀 短期目标 (1-3个月)
-- [ ] **BBRv3拥塞控制**: 集成最新的BBRv3算法
-- [ ] **性能优化**: 进一步优化QUIC传输性能
+- [ ] **工程收口**: 清理默认调试输出、统一命名、补齐基础文档
+- [ ] **最小回归测试**: 增加 QUIC DataChannel open/string/binary/close e2e 测试
+- [ ] **性能复现**: 固化测试矩阵、环境说明、原始日志和结果报告
 - [ ] **错误处理**: 增强异常情况处理能力
-- [ ] **文档完善**: 补充API文档和使用说明
 
 ### 🎯 中期目标 (3-6个月)
-- [ ] **eBPF零拷贝**: 实现基于eBPF的零拷贝加速
 - [ ] **拥塞控制算法**: 支持多种拥塞控制算法
 - [ ] **分布式测试**: 跨机器、跨网络性能验证
 - [ ] **压力测试**: 大规模并发连接测试
+- [ ] **SDK文档化**: 补充架构、构建选项、API边界和已知限制
 
 ### 🌟 长期目标 (6-12个月)
-- [ ] **生产环境部署**: 准备生产环境部署
+- [ ] **生产化评估**: 明确稳定性、兼容性、可观测性和故障恢复要求
 - [ ] **跨平台优化**: 在不同操作系统上优化性能
 - [ ] **云原生支持**: 支持Kubernetes和容器化部署
 - [ ] **生态建设**: 构建开发者社区和工具链
@@ -307,9 +318,17 @@ chmod +x quic_performance_test.sh
 
 ## 📖 文档
 
-- [**架构设计与原理文档**](docs/ARCHITECTURE.md): 详细介绍了项目的分层架构、连接建立流程、数据发送/接收流程（Reliable Stream vs Unreliable Datagram）以及核心技术点。
-- [构建指南](docs/BUILDING.md) (待补充)
-- [API 参考](docs/API.md) (待补充)
+当前主要文档：
+
+- [构建说明](BUILDING.md)
+- [API与使用说明](DOC.md)
+- [QUIC示例说明](examples/quic-datachannel-example/README.md)
+
+计划补充：
+
+- `docs/ARCHITECTURE.md`: SCTP vs QUIC、Stream vs Datagram、SDP 协商和数据路径。
+- `docs/API.md`: `rtc::Configuration` 中 QUIC 与 BBR 参数说明。
+- `docs/PERFORMANCE.md`: 可复现性能测试环境、命令、原始日志和结果汇总。
 
 ---
 
@@ -326,16 +345,16 @@ chmod +x quic_performance_test.sh
 
 ### 开发环境设置
 ```bash
-# 克隆开发分支
-git clone -b develop https://github.com/Toxic686/kratos-rtc.git
+# 克隆项目
+git clone https://github.com/Toxic686/kratos-rtc.git
 cd kratos-rtc
 
 # 安装开发依赖
 sudo apt install clang-format cppcheck valgrind
 
-# 运行代码检查
-make lint
-make check
+# 构建开发版本
+cmake -B build -DENABLE_QUIC=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --parallel
 ```
 
 ---
@@ -369,5 +388,4 @@ make check
 
 ---
 
-*最后更新: 2026年1月20日*
-
+*最后更新: 2026年6月30日*
